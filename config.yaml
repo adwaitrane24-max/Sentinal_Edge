@@ -1,0 +1,71 @@
+# SentinelEdge Configuration
+
+capture:
+  interface: "eth0"          # change to your VM NIC name
+  pcap_file: null            # set to a .pcap path for offline replay, e.g. "sample.pcap"
+  dry_run: true              # true = log only; false = apply nftables rules
+
+whitelist:
+  - "127.0.0.1"
+  - "192.168.56.1"           # VirtualBox host IP — never block this
+
+rules:
+  - id: PORTSCAN-001
+    category: recon
+    algorithm: trw
+    params:
+      alpha: 0.01
+      beta: 0.01
+      theta0: 0.8
+      theta1: 0.2
+    severity: medium
+    action: rate_limit
+    enabled: true
+
+  - id: SYNFLOOD-001
+    category: dos
+    algorithm: ewma_threshold
+    params:
+      lambda: 0.2
+      k_sigma: 4
+      hard_ceiling_per_sec: 150
+    severity: high
+    action: block
+    enabled: true
+
+  - id: BRUTEFORCE-001
+    category: auth
+    algorithm: brute_force
+    params:
+      fail_threshold_alert: 6
+      fail_window_alert_sec: 60
+      fail_threshold_block: 10
+      fail_window_block_sec: 300
+    severity: high
+    action: block
+    enabled: true
+
+  - id: EXFIL-001
+    category: exfil
+    algorithm: exfil_volume
+    params:
+      multiplier: 5
+      window_sec: 300
+      absolute_floor_bytes: 524288000   # 500 MB
+    severity: medium
+    action: alert_only
+    enabled: true
+
+signatures:
+  - id: SIG-001
+    pattern: "/etc/passwd"
+    severity: high
+  - id: SIG-002
+    pattern: "cmd.exe"
+    severity: high
+  - id: SIG-003
+    pattern: "SELECT * FROM"
+    severity: medium
+  - id: SIG-004
+    pattern: "nmap"
+    severity: low

@@ -1,0 +1,7 @@
+scapy
+fastapi
+uvicorn[standard]
+websockets
+jinja2
+pyahocorasick
+pyyaml

@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SentinelEdge — NIDS Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <style>
+    /* ── Reset & tokens ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:         #0a0e1a;
+      --surface:    #111827;
+      --surface2:   #1a2236;
+      --border:     #1e2d45;
+      --accent:     #00d4ff;
+      --accent2:    #7c3aed;
+      --red:        #ef4444;
+      --orange:     #f97316;
+      --yellow:     #eab308;
+      --green:      #22c55e;
+      --text:       #e2e8f0;
+      --muted:      #64748b;
+      --radius:     12px;
+      --radius-sm:  8px;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Animated background grid ── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(rgba(0,212,255,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,212,255,.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Layout ── */
+    .app { position: relative; z-index: 1; }
+
+    /* ── Header ── */
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 32px;
+      background: rgba(17,24,39,.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+    }
+    .logo {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .logo-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    .logo-text { font-size: 20px; font-weight: 700; letter-spacing: -.5px; }
+    .logo-sub  { font-size: 11px; color: var(--muted); font-weight: 400; }
+
+    .status-bar {
+      display: flex; align-items: center; gap: 20px;
+    }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity: 1; } 50% { opacity: .4; }
+    }
+    .status-label { font-size: 13px; color: var(--muted); }
+    #pkt-count { font-family: 'JetBrains Mono', monospace; color: var(--accent); font-size: 13px; }
+    #conn-status { font-size: 12px; padding: 4px 10px; border-radius: 20px; background: rgba(34,197,94,.15); color: var(--green); }
+
+    /* ── Stats row ── */
+    .stats {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+      padding: 24px 32px 0;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      position: relative; overflow: hidden;
+      transition: border-color .2s, transform .2s;
+    }
+    .stat-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .stat-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    }
+    .stat-card.red::before   { background: var(--red); }
+    .stat-card.orange::before{ background: var(--orange); }
+    .stat-card.yellow::before{ background: var(--yellow); }
+    .stat-card.green::before { background: var(--green); }
+    .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+    .stat-value { font-size: 32px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .stat-card.red    .stat-value { color: var(--red); }
+    .stat-card.orange .stat-value { color: var(--orange); }
+    .stat-card.yellow .stat-value { color: var(--yellow); }
+    .stat-card.green  .stat-value { color: var(--green); }
+
+    /* ── Main grid ── */
+    .main {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 16px;
+      padding: 24px 32px;
+    }
+    @media (max-width: 900px) { .main { grid-template-columns: 1fr; } }
+
+    /* ── Panel ── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+    }
+    .panel-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .panel-title .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .panel-badge {
+      font-size: 11px; font-weight: 600;
+      background: rgba(0,212,255,.1); color: var(--accent);
+      padding: 3px 8px; border-radius: 20px;
+    }
+
+    /* ── Alert table ── */
+    .alert-list { max-height: 480px; overflow-y: auto; }
+    .alert-list::-webkit-scrollbar { width: 4px; }
+    .alert-list::-webkit-scrollbar-track { background: transparent; }
+    .alert-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .alert-row {
+      display: grid;
+      grid-template-columns: 140px 120px 130px 1fr 90px 90px;
+      gap: 12px; align-items: center;
+      padding: 12px 20px;
+      border-bottom: 1px solid rgba(30,45,69,.6);
+      font-size: 13px;
+      transition: background .15s;
+      animation: slideIn .3s ease;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(-10px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    .alert-row:hover { background: var(--surface2); }
+    .alert-row:last-child { border-bottom: none; }
+
+    .alert-header-row {
+      display: grid;
+      grid-template-columns: 140px 120px 130px 1fr 90px 90px;
+      gap: 12px;
+      padding: 10px 20px;
+      font-size: 11px; font-weight: 600;
+      color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+    }
+
+    .ts  { font-family: 'JetBrains Mono', monospace; color: var(--muted); font-size: 11px; }
+    .src-ip { font-family: 'JetBrains Mono', monospace; color: var(--accent); font-size: 12px; }
+    .detail { color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* severity badges */
+    .sev {
+      display: inline-block; padding: 3px 8px;
+      border-radius: 20px; font-size: 11px; font-weight: 600;
+      text-transform: uppercase;
+    }
+    .sev-high   { background: rgba(239,68,68,.15); color: var(--red); }
+    .sev-medium { background: rgba(249,115,22,.15); color: var(--orange); }
+    .sev-low    { background: rgba(234,179,8,.15);  color: var(--yellow); }
+
+    /* action badges */
+    .act {
+      display: inline-block; padding: 3px 8px;
+      border-radius: 20px; font-size: 11px; font-weight: 600;
+    }
+    .act-block      { background: rgba(239,68,68,.12); color: var(--red); }
+    .act-rate_limit { background: rgba(249,115,22,.12); color: var(--orange); }
+    .act-alert_only { background: rgba(100,116,139,.12); color: var(--muted); }
+
+    /* category chip */
+    .cat {
+      display: inline-block; padding: 3px 8px;
+      border-radius: 20px; font-size: 11px; font-weight: 500;
+    }
+    .cat-recon     { background: rgba(124,58,237,.15); color: #a78bfa; }
+    .cat-dos       { background: rgba(239,68,68,.15); color: var(--red); }
+    .cat-auth      { background: rgba(249,115,22,.15); color: var(--orange); }
+    .cat-exfil     { background: rgba(234,179,8,.15); color: var(--yellow); }
+    .cat-signature { background: rgba(0,212,255,.15); color: var(--accent); }
+
+    /* ── Side panels ── */
+    .side { display: flex; flex-direction: column; gap: 16px; }
+
+    .ip-list { padding: 12px 0; max-height: 200px; overflow-y: auto; }
+    .ip-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 20px; font-size: 13px;
+      transition: background .15s;
+    }
+    .ip-row:hover { background: var(--surface2); }
+    .ip-addr { font-family: 'JetBrains Mono', monospace; color: var(--text); font-size: 12px; }
+    .ip-meta { color: var(--muted); font-size: 11px; }
+    .btn-remove {
+      background: rgba(239,68,68,.1); color: var(--red);
+      border: 1px solid rgba(239,68,68,.2); border-radius: 6px;
+      padding: 3px 8px; font-size: 11px; cursor: pointer; transition: all .15s;
+    }
+    .btn-remove:hover { background: rgba(239,68,68,.2); }
+
+    /* Add IP form */
+    .add-form {
+      display: flex; gap: 8px; padding: 12px 20px;
+      border-top: 1px solid var(--border);
+    }
+    .add-form input {
+      flex: 1;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 8px 12px;
+      color: var(--text); font-size: 13px; font-family: 'JetBrains Mono', monospace;
+      outline: none; transition: border-color .15s;
+    }
+    .add-form input:focus { border-color: var(--accent); }
+    .btn-add {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: white; border: none; border-radius: var(--radius-sm);
+      padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-add:hover { opacity: .85; }
+
+    /* ── Empty state ── */
+    .empty { padding: 40px; text-align: center; color: var(--muted); font-size: 13px; }
+    .empty-icon { font-size: 32px; margin-bottom: 12px; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 32px; right: 32px; z-index: 999;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius-sm); padding: 12px 20px;
+      font-size: 13px; transform: translateY(80px); opacity: 0;
+      transition: all .3s;
+    }
+    #toast.show { transform: translateY(0); opacity: 1; }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🛡️</div>
+      <div>
+        <div class="logo-text">SentinelEdge</div>
+        <div class="logo-sub">Network Intrusion Detection System</div>
+      </div>
+    </div>
+    <div class="status-bar">
+      <div class="status-dot" id="live-dot"></div>
+      <span class="status-label">Monitoring • <span id="pkt-count">0</span> packets</span>
+      <span id="conn-status">● Connected</span>
+    </div>
+  </header>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat-card red">
+      <div class="stat-label">Total Alerts</div>
+      <div class="stat-value" id="stat-total">0</div>
+    </div>
+    <div class="stat-card orange">
+      <div class="stat-label">Blocked IPs</div>
+      <div class="stat-value" id="stat-blocks">0</div>
+    </div>
+    <div class="stat-card yellow">
+      <div class="stat-label">High Severity</div>
+      <div class="stat-value" id="stat-high">0</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Whitelisted</div>
+      <div class="stat-value" id="stat-white">0</div>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- Alert feed -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="dot" style="background:var(--red);box-shadow:0 0 6px var(--red)"></div>
+          Live Alert Feed
+        </div>
+        <span class="panel-badge" id="alert-count">0 alerts</span>
+      </div>
+      <div class="alert-header-row">
+        <span>Time</span>
+        <span>Rule ID</span>
+        <span>Source IP</span>
+        <span>Detail</span>
+        <span>Severity</span>
+        <span>Action</span>
+      </div>
+      <div class="alert-list" id="alert-list">
+        <div class="empty">
+          <div class="empty-icon">🔍</div>
+          Waiting for traffic… Start the detection engine or replay a PCAP.
+        </div>
+      </div>
+    </div>
+
+    <!-- Side panels -->
+    <div class="side">
+
+      <!-- Blocked IPs -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <div class="dot" style="background:var(--red)"></div>
+            Blocked / Rate-limited
+          </div>
+          <span class="panel-badge" id="block-count">0</span>
+        </div>
+        <div class="ip-list" id="block-list"></div>
+        <div class="add-form">
+          <input id="block-ip-input" placeholder="x.x.x.x" maxlength="40"/>
+          <button class="btn-add" onclick="manualBlock()">Block</button>
+        </div>
+      </div>
+
+      <!-- Whitelist -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <div class="dot" style="background:var(--green)"></div>
+            Whitelist
+          </div>
+          <span class="panel-badge" id="white-count">0</span>
+        </div>
+        <div class="ip-list" id="white-list"></div>
+        <div class="add-form">
+          <input id="white-ip-input" placeholder="x.x.x.x" maxlength="40"/>
+          <button class="btn-add" onclick="addWhitelist()" style="background:linear-gradient(135deg,var(--green),#16a34a)">Allow</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+  // ── Utilities ──────────────────────────────────────────────────────────────
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 3000);
+  }
+
+  function sevClass(s) {
+    return { high:'sev-high', medium:'sev-medium', low:'sev-low' }[s] || 'sev-low';
+  }
+  function actClass(a) {
+    return { block:'act-block', rate_limit:'act-rate_limit', alert_only:'act-alert_only' }[a] || 'act-alert_only';
+  }
+  function catClass(c) {
+    return `cat-${c}`;
+  }
+  function fmtTime(ts) {
+    try { return new Date(ts + 'Z').toLocaleTimeString(); } catch { return ts?.slice(11,19) || ''; }
+  }
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let alertRows = [];
+  let pktCount  = 0;
+  let highCount = 0;
+
+  // ── Alert rendering ────────────────────────────────────────────────────────
+  function renderAlert(a) {
+    const list = document.getElementById('alert-list');
+    const empty = list.querySelector('.empty');
+    if (empty) empty.remove();
+
+    const row = document.createElement('div');
+    row.className = 'alert-row';
+    row.innerHTML = `
+      <span class="ts">${fmtTime(a.timestamp)}</span>
+      <span class="cat ${catClass(a.category)}">${a.alert_id}</span>
+      <span class="src-ip">${a.src_ip}</span>
+      <span class="detail" title="${a.detail}">${a.detail}</span>
+      <span class="sev ${sevClass(a.severity)}">${a.severity}</span>
+      <span class="act ${actClass(a.action)}">${a.action.replace('_',' ')}</span>
+    `;
+    list.prepend(row);
+    alertRows.unshift(a);
+    if (alertRows.length > 100) {
+      alertRows.pop();
+      const last = list.lastElementChild;
+      if (last && !last.classList.contains('alert-header-row')) last.remove();
+    }
+
+    // Update stats
+    document.getElementById('stat-total').textContent = alertRows.length;
+    document.getElementById('alert-count').textContent = alertRows.length + ' alerts';
+    if (a.severity === 'high') {
+      highCount++;
+      document.getElementById('stat-high').textContent = highCount;
+    }
+    pktCount++;
+    document.getElementById('pkt-count').textContent = pktCount.toLocaleString();
+  }
+
+  // ── Block list rendering ───────────────────────────────────────────────────
+  function renderBlocks(blocks) {
+    const el = document.getElementById('block-list');
+    document.getElementById('block-count').textContent = blocks.length;
+    document.getElementById('stat-blocks').textContent = blocks.length;
+    if (!blocks.length) { el.innerHTML = '<div class="empty" style="padding:20px">No blocks</div>'; return; }
+    el.innerHTML = blocks.map(b => `
+      <div class="ip-row">
+        <div>
+          <div class="ip-addr">${b.src_ip}</div>
+          <div class="ip-meta">${b.reason || ''} · ${fmtTime(b.blocked_at)}</div>
+        </div>
+        <button class="btn-remove" onclick="removeBlock('${b.src_ip}')">Remove</button>
+      </div>
+    `).join('');
+  }
+
+  // ── Whitelist rendering ────────────────────────────────────────────────────
+  function renderWhitelist(items) {
+    const el = document.getElementById('white-list');
+    document.getElementById('white-count').textContent = items.length;
+    document.getElementById('stat-white').textContent = items.length;
+    if (!items.length) { el.innerHTML = '<div class="empty" style="padding:20px">No entries</div>'; return; }
+    el.innerHTML = items.map(w => `
+      <div class="ip-row">
+        <div>
+          <div class="ip-addr">${w.ip}</div>
+          <div class="ip-meta">${w.note || 'trusted host'}</div>
+        </div>
+        <button class="btn-remove" style="color:var(--green);border-color:rgba(34,197,94,.2);background:rgba(34,197,94,.1)"
+          onclick="removeWhitelist('${w.ip}')">Remove</button>
+      </div>
+    `).join('');
+  }
+
+  // ── API calls ──────────────────────────────────────────────────────────────
+  async function fetchAll() {
+    const [alerts, blocks, wl] = await Promise.all([
+      fetch('/api/alerts').then(r=>r.json()),
+      fetch('/api/blocks').then(r=>r.json()),
+      fetch('/api/whitelist').then(r=>r.json()),
+    ]);
+    alerts.reverse().forEach(renderAlert);
+    renderBlocks(blocks);
+    renderWhitelist(wl);
+  }
+
+  async function manualBlock() {
+    const ip = document.getElementById('block-ip-input').value.trim();
+    if (!ip) return;
+    await fetch('/api/blocks', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip, reason:'manual'}) });
+    document.getElementById('block-ip-input').value = '';
+    const blocks = await fetch('/api/blocks').then(r=>r.json());
+    renderBlocks(blocks);
+    toast(`Blocked ${ip}`);
+  }
+
+  async function removeBlock(ip) {
+    await fetch(`/api/blocks/${ip}`, { method:'DELETE' });
+    const blocks = await fetch('/api/blocks').then(r=>r.json());
+    renderBlocks(blocks);
+    toast(`Unblocked ${ip}`);
+  }
+
+  async function addWhitelist() {
+    const ip = document.getElementById('white-ip-input').value.trim();
+    if (!ip) return;
+    await fetch('/api/whitelist', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip}) });
+    document.getElementById('white-ip-input').value = '';
+    const wl = await fetch('/api/whitelist').then(r=>r.json());
+    renderWhitelist(wl);
+    toast(`${ip} whitelisted`);
+  }
+
+  async function removeWhitelist(ip) {
+    await fetch(`/api/whitelist/${ip}`, { method:'DELETE' });
+    const wl = await fetch('/api/whitelist').then(r=>r.json());
+    renderWhitelist(wl);
+    toast(`Removed ${ip} from whitelist`);
+  }
+
+  // ── WebSocket ──────────────────────────────────────────────────────────────
+  function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+    ws.onopen = () => {
+      document.getElementById('conn-status').textContent = '● Connected';
+      document.getElementById('conn-status').style.color = 'var(--green)';
+    };
+    ws.onmessage = async (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'alert') {
+        renderAlert(msg.data);
+        toast(`⚠ ${msg.data.alert_id} from ${msg.data.src_ip}`);
+      } else if (msg.type === 'block_added' || msg.type === 'block_removed') {
+        const blocks = await fetch('/api/blocks').then(r=>r.json());
+        renderBlocks(blocks);
+      }
+    };
+    ws.onclose = () => {
+      document.getElementById('conn-status').textContent = '○ Reconnecting…';
+      document.getElementById('conn-status').style.color = 'var(--muted)';
+      setTimeout(connectWS, 3000);
+    };
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  fetchAll();
+  connectWS();
+</script>
+</body>
+</html>
