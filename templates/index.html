@@ -1,554 +1,475 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>SentinelEdge — NIDS Dashboard</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-  <style>
-    /* ── Reset & tokens ── */
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --bg:         #0a0e1a;
-      --surface:    #111827;
-      --surface2:   #1a2236;
-      --border:     #1e2d45;
-      --accent:     #00d4ff;
-      --accent2:    #7c3aed;
-      --red:        #ef4444;
-      --orange:     #f97316;
-      --yellow:     #eab308;
-      --green:      #22c55e;
-      --text:       #e2e8f0;
-      --muted:      #64748b;
-      --radius:     12px;
-      --radius-sm:  8px;
-    }
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Inter', sans-serif;
-      min-height: 100vh;
-      overflow-x: hidden;
-    }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SentinelEdge | Network Operations</title>
+<style>
+:root {
+  color-scheme:dark;
+  --bg:#080f1d;
+  --card:#111c2d;
+  --border:#25344a;
+  --muted:#94a6bd;
+  --cyan:#56d9eb;
+  --red:#ff7988;
+  --orange:#ffb66e;
+  --yellow:#f3d878}
+* {
+  box-sizing:border-box}
+body {
+  margin:0;
+  background:var(--bg);
+  color:#e7eff9;
+  font:14px system-ui,sans-serif}
+main {
+  max-width:1600px;
+  margin:auto;
+  padding:28px}
+header {
+  display:flex;
+  justify-content:space-between;
+  gap:24px;
+  align-items:center;
+  margin-bottom:28px}
+h1 {
+  font-size:28px;
+  margin:0;
+  letter-spacing:-1px}
+h2 {
+  font-size:15px;
+  margin:0}
+p,.muted {
+  color:var(--muted)}
+header p {
+  margin:6px 0}
+.status {
+  display:flex;
+  gap:12px;
+  flex-wrap:wrap}
+.badge {
+  border:1px solid var(--border);
+  border-radius:5px;
+  padding:6px 9px;
+  font:12px monospace;
+  color:var(--cyan)}
+.metrics {
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:14px;
+  margin-bottom:14px}
+.card,.panel {
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:10px}
+.card {
+  padding:20px}
+.label {
+  color:var(--muted);
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:1.3px}
+.value {
+  font:30px monospace;
+  margin:10px 0 0}
+.secondary {
+  grid-template-columns:repeat(6,1fr)}
+.secondary .card {
+  padding:15px}
+.secondary .value {
+  font-size:20px}
+.grid {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 340px;
+  gap:16px}
+.stack,.panel {
+  min-width:0}
+.stack {
+  display:grid;
+  gap:16px;
+  align-content:start}
+.panel-head {
+  padding:18px 20px;
+  border-bottom:1px solid var(--border);
+  display:flex;
+  justify-content:space-between;
+  align-items:center}
+.content {
+  padding:20px}
+.charts {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:20px}
+canvas {
+  display:block;
+  width:100%;
+  height:140px}
+.chart-title {
+  color:var(--muted);
+  font:12px monospace}
+.activity {
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:16px;
+  border-top:1px solid var(--border);
+  padding-top:20px;
+  margin-top:20px}
+.activity strong {
+  display:block;
+  font:16px monospace;
+  margin-top:7px}
+.table-wrap {
+  overflow:auto;
+  max-height:440px}
+table {
+  border-collapse:collapse;
+  width:100%;
+  min-width:850px}
+th,td {
+  text-align:left;
+  padding:13px 14px;
+  border-bottom:1px solid var(--border);
+  font-size:12px}
+th {
+  color:var(--muted);
+  position:sticky;
+  top:0;
+  background:var(--card)}
+td:nth-child(5) {
+  font-family:monospace;
+  color:var(--cyan)}
+td:last-child {
+  min-width:200px;
+  white-space:normal}
+.severity {
+  font:11px monospace;
+  padding:4px 7px;
+  border-radius:4px;
+  background:#25344a}
+.high,.critical {
+  color:var(--red)}
+.medium,.elevated {
+  color:var(--orange)}
+.low {
+  color:var(--yellow)}
+.normal {
+  color:var(--cyan)}
+.empty {
+  padding:26px;
+  color:var(--muted);
+  text-align:center}
+.ip-row {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:10px;
+  padding:12px 20px;
+  border-bottom:1px solid var(--border)}
+.ip-row strong {
+  font:13px monospace}
+.ip-row small {
+  display:block;
+  color:var(--muted);
+  margin-top:5px;
+  overflow-wrap:anywhere}
+.ip-list {
+  max-height:230px;
+  overflow:auto}
+button,input {
+  font:12px system-ui;
+  border:1px solid var(--border);
+  border-radius:5px;
+  padding:9px;
+  background:#0a1423;
+  color:#e7eff9}
+button {
+  cursor:pointer;
+  color:var(--cyan)}
+button:hover {
+  border-color:var(--cyan)}
+input {
+  min-width:0;
+  width:100%}
+input:focus-visible,button:focus-visible {
+  outline:2px solid var(--cyan)}
+form {
+  display:grid;
+  gap:8px;
+  padding:16px 20px}
+form .line {
+  display:flex;
+  gap:8px}
+.distribution .row {
+  margin-top:15px}
+.distribution .row div {
+  display:flex;
+  justify-content:space-between;
+  margin-bottom:6px}
+.bar {
+  height:5px;
+  background:#26374d;
+  border-radius:4px;
+  overflow:hidden}
+.bar i {
+  display:block;
+  height:100%;
+  background:var(--cyan)}
+.bottom {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+  margin-top:16px}
+#threat {
+  font:28px monospace;
+  margin:0 0 8px}
+#toast {
+  position:fixed;
+  bottom:24px;
+  right:24px;
+  background:#21354c;
+  padding:14px;
+  border-radius:8px;
+  max-width:400px;
+  display:none}
+#traffic-empty {
+  padding:12px 0 0;
+  text-align:left}
+#capture-error {
+  color:var(--red);
+  overflow-wrap:anywhere}
+.footer {
+  font:11px monospace;
+  color:var(--muted);
+  margin-top:24px}
+.system {
+  display:flex;
+  flex-wrap:wrap;
+  gap:22px}
+@media(max-width:1100px) {
+  .grid {
+  grid-template-columns:1fr}
+.secondary {
+  grid-template-columns:repeat(3,1fr)}
+.stack.side {
+  grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:650px) {
+  main {
+  padding:16px}
+header {
+  align-items:flex-start;
+  flex-direction:column}
+.metrics,.charts,.bottom,.stack.side {
+  grid-template-columns:1fr 1fr}
+.secondary {
+  grid-template-columns:repeat(2,1fr)}
+.charts,.bottom,.stack.side {
+  grid-template-columns:1fr}
+.activity {
+  grid-template-columns:repeat(2,1fr)}
+.value {
+  font-size:24px}
+}
 
-    /* ── Animated background grid ── */
-    body::before {
-      content: '';
-      position: fixed; inset: 0;
-      background-image:
-        linear-gradient(rgba(0,212,255,.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(0,212,255,.03) 1px, transparent 1px);
-      background-size: 40px 40px;
-      pointer-events: none;
-      z-index: 0;
-    }
-
-    /* ── Layout ── */
-    .app { position: relative; z-index: 1; }
-
-    /* ── Header ── */
-    header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 16px 32px;
-      background: rgba(17,24,39,.85);
-      backdrop-filter: blur(12px);
-      border-bottom: 1px solid var(--border);
-      position: sticky; top: 0; z-index: 100;
-    }
-    .logo {
-      display: flex; align-items: center; gap: 12px;
-    }
-    .logo-icon {
-      width: 36px; height: 36px;
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-      border-radius: 10px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px;
-    }
-    .logo-text { font-size: 20px; font-weight: 700; letter-spacing: -.5px; }
-    .logo-sub  { font-size: 11px; color: var(--muted); font-weight: 400; }
-
-    .status-bar {
-      display: flex; align-items: center; gap: 20px;
-    }
-    .status-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 8px var(--green);
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-      0%,100% { opacity: 1; } 50% { opacity: .4; }
-    }
-    .status-label { font-size: 13px; color: var(--muted); }
-    #pkt-count { font-family: 'JetBrains Mono', monospace; color: var(--accent); font-size: 13px; }
-    #conn-status { font-size: 12px; padding: 4px 10px; border-radius: 20px; background: rgba(34,197,94,.15); color: var(--green); }
-
-    /* ── Stats row ── */
-    .stats {
-      display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
-      padding: 24px 32px 0;
-    }
-    .stat-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 20px 24px;
-      position: relative; overflow: hidden;
-      transition: border-color .2s, transform .2s;
-    }
-    .stat-card:hover { border-color: var(--accent); transform: translateY(-2px); }
-    .stat-card::before {
-      content: '';
-      position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    }
-    .stat-card.red::before   { background: var(--red); }
-    .stat-card.orange::before{ background: var(--orange); }
-    .stat-card.yellow::before{ background: var(--yellow); }
-    .stat-card.green::before { background: var(--green); }
-    .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
-    .stat-value { font-size: 32px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
-    .stat-card.red    .stat-value { color: var(--red); }
-    .stat-card.orange .stat-value { color: var(--orange); }
-    .stat-card.yellow .stat-value { color: var(--yellow); }
-    .stat-card.green  .stat-value { color: var(--green); }
-
-    /* ── Main grid ── */
-    .main {
-      display: grid;
-      grid-template-columns: 1fr 360px;
-      gap: 16px;
-      padding: 24px 32px;
-    }
-    @media (max-width: 900px) { .main { grid-template-columns: 1fr; } }
-
-    /* ── Panel ── */
-    .panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-    }
-    .panel-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface2);
-    }
-    .panel-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-    .panel-title .dot { width: 8px; height: 8px; border-radius: 50%; }
-    .panel-badge {
-      font-size: 11px; font-weight: 600;
-      background: rgba(0,212,255,.1); color: var(--accent);
-      padding: 3px 8px; border-radius: 20px;
-    }
-
-    /* ── Alert table ── */
-    .alert-list { max-height: 480px; overflow-y: auto; }
-    .alert-list::-webkit-scrollbar { width: 4px; }
-    .alert-list::-webkit-scrollbar-track { background: transparent; }
-    .alert-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-    .alert-row {
-      display: grid;
-      grid-template-columns: 140px 120px 130px 1fr 90px 90px;
-      gap: 12px; align-items: center;
-      padding: 12px 20px;
-      border-bottom: 1px solid rgba(30,45,69,.6);
-      font-size: 13px;
-      transition: background .15s;
-      animation: slideIn .3s ease;
-    }
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateX(-10px); }
-      to   { opacity: 1; transform: translateX(0); }
-    }
-    .alert-row:hover { background: var(--surface2); }
-    .alert-row:last-child { border-bottom: none; }
-
-    .alert-header-row {
-      display: grid;
-      grid-template-columns: 140px 120px 130px 1fr 90px 90px;
-      gap: 12px;
-      padding: 10px 20px;
-      font-size: 11px; font-weight: 600;
-      color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface2);
-    }
-
-    .ts  { font-family: 'JetBrains Mono', monospace; color: var(--muted); font-size: 11px; }
-    .src-ip { font-family: 'JetBrains Mono', monospace; color: var(--accent); font-size: 12px; }
-    .detail { color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-    /* severity badges */
-    .sev {
-      display: inline-block; padding: 3px 8px;
-      border-radius: 20px; font-size: 11px; font-weight: 600;
-      text-transform: uppercase;
-    }
-    .sev-high   { background: rgba(239,68,68,.15); color: var(--red); }
-    .sev-medium { background: rgba(249,115,22,.15); color: var(--orange); }
-    .sev-low    { background: rgba(234,179,8,.15);  color: var(--yellow); }
-
-    /* action badges */
-    .act {
-      display: inline-block; padding: 3px 8px;
-      border-radius: 20px; font-size: 11px; font-weight: 600;
-    }
-    .act-block      { background: rgba(239,68,68,.12); color: var(--red); }
-    .act-rate_limit { background: rgba(249,115,22,.12); color: var(--orange); }
-    .act-alert_only { background: rgba(100,116,139,.12); color: var(--muted); }
-
-    /* category chip */
-    .cat {
-      display: inline-block; padding: 3px 8px;
-      border-radius: 20px; font-size: 11px; font-weight: 500;
-    }
-    .cat-recon     { background: rgba(124,58,237,.15); color: #a78bfa; }
-    .cat-dos       { background: rgba(239,68,68,.15); color: var(--red); }
-    .cat-auth      { background: rgba(249,115,22,.15); color: var(--orange); }
-    .cat-exfil     { background: rgba(234,179,8,.15); color: var(--yellow); }
-    .cat-signature { background: rgba(0,212,255,.15); color: var(--accent); }
-
-    /* ── Side panels ── */
-    .side { display: flex; flex-direction: column; gap: 16px; }
-
-    .ip-list { padding: 12px 0; max-height: 200px; overflow-y: auto; }
-    .ip-row {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 8px 20px; font-size: 13px;
-      transition: background .15s;
-    }
-    .ip-row:hover { background: var(--surface2); }
-    .ip-addr { font-family: 'JetBrains Mono', monospace; color: var(--text); font-size: 12px; }
-    .ip-meta { color: var(--muted); font-size: 11px; }
-    .btn-remove {
-      background: rgba(239,68,68,.1); color: var(--red);
-      border: 1px solid rgba(239,68,68,.2); border-radius: 6px;
-      padding: 3px 8px; font-size: 11px; cursor: pointer; transition: all .15s;
-    }
-    .btn-remove:hover { background: rgba(239,68,68,.2); }
-
-    /* Add IP form */
-    .add-form {
-      display: flex; gap: 8px; padding: 12px 20px;
-      border-top: 1px solid var(--border);
-    }
-    .add-form input {
-      flex: 1;
-      background: var(--bg); border: 1px solid var(--border);
-      border-radius: var(--radius-sm); padding: 8px 12px;
-      color: var(--text); font-size: 13px; font-family: 'JetBrains Mono', monospace;
-      outline: none; transition: border-color .15s;
-    }
-    .add-form input:focus { border-color: var(--accent); }
-    .btn-add {
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-      color: white; border: none; border-radius: var(--radius-sm);
-      padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
-      transition: opacity .15s;
-    }
-    .btn-add:hover { opacity: .85; }
-
-    /* ── Empty state ── */
-    .empty { padding: 40px; text-align: center; color: var(--muted); font-size: 13px; }
-    .empty-icon { font-size: 32px; margin-bottom: 12px; }
-
-    /* ── Toast ── */
-    #toast {
-      position: fixed; bottom: 32px; right: 32px; z-index: 999;
-      background: var(--surface2); border: 1px solid var(--border);
-      border-left: 3px solid var(--accent);
-      border-radius: var(--radius-sm); padding: 12px 20px;
-      font-size: 13px; transform: translateY(80px); opacity: 0;
-      transition: all .3s;
-    }
-    #toast.show { transform: translateY(0); opacity: 1; }
-  </style>
+</style>
 </head>
 <body>
-<div class="app">
-
-  <!-- Header -->
-  <header>
-    <div class="logo">
-      <div class="logo-icon">🛡️</div>
-      <div>
-        <div class="logo-text">SentinelEdge</div>
-        <div class="logo-sub">Network Intrusion Detection System</div>
-      </div>
-    </div>
-    <div class="status-bar">
-      <div class="status-dot" id="live-dot"></div>
-      <span class="status-label">Monitoring • <span id="pkt-count">0</span> packets</span>
-      <span id="conn-status">● Connected</span>
-    </div>
-  </header>
-
-  <!-- Stats -->
-  <div class="stats">
-    <div class="stat-card red">
-      <div class="stat-label">Total Alerts</div>
-      <div class="stat-value" id="stat-total">0</div>
-    </div>
-    <div class="stat-card orange">
-      <div class="stat-label">Blocked IPs</div>
-      <div class="stat-value" id="stat-blocks">0</div>
-    </div>
-    <div class="stat-card yellow">
-      <div class="stat-label">High Severity</div>
-      <div class="stat-value" id="stat-high">0</div>
-    </div>
-    <div class="stat-card green">
-      <div class="stat-label">Whitelisted</div>
-      <div class="stat-value" id="stat-white">0</div>
-    </div>
-  </div>
-
-  <!-- Main -->
-  <div class="main">
-
-    <!-- Alert feed -->
-    <div class="panel">
-      <div class="panel-header">
-        <div class="panel-title">
-          <div class="dot" style="background:var(--red);box-shadow:0 0 6px var(--red)"></div>
-          Live Alert Feed
-        </div>
-        <span class="panel-badge" id="alert-count">0 alerts</span>
-      </div>
-      <div class="alert-header-row">
-        <span>Time</span>
-        <span>Rule ID</span>
-        <span>Source IP</span>
-        <span>Detail</span>
-        <span>Severity</span>
-        <span>Action</span>
-      </div>
-      <div class="alert-list" id="alert-list">
-        <div class="empty">
-          <div class="empty-icon">🔍</div>
-          Waiting for traffic… Start the detection engine or replay a PCAP.
-        </div>
-      </div>
-    </div>
-
-    <!-- Side panels -->
-    <div class="side">
-
-      <!-- Blocked IPs -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title">
-            <div class="dot" style="background:var(--red)"></div>
-            Blocked / Rate-limited
-          </div>
-          <span class="panel-badge" id="block-count">0</span>
-        </div>
-        <div class="ip-list" id="block-list"></div>
-        <div class="add-form">
-          <input id="block-ip-input" placeholder="x.x.x.x" maxlength="40"/>
-          <button class="btn-add" onclick="manualBlock()">Block</button>
-        </div>
-      </div>
-
-      <!-- Whitelist -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title">
-            <div class="dot" style="background:var(--green)"></div>
-            Whitelist
-          </div>
-          <span class="panel-badge" id="white-count">0</span>
-        </div>
-        <div class="ip-list" id="white-list"></div>
-        <div class="add-form">
-          <input id="white-ip-input" placeholder="x.x.x.x" maxlength="40"/>
-          <button class="btn-add" onclick="addWhitelist()" style="background:linear-gradient(135deg,var(--green),#16a34a)">Allow</button>
-        </div>
-      </div>
-
-    </div>
-  </div>
+<main>
+<header>
+<div>
+<h1>Sentinel<span style="color:var(--cyan)">Edge</span>
+</h1>
+<p>Network Intrusion Detection &amp; Response</p>
 </div>
-
-<!-- Toast -->
-<div id="toast"></div>
-
+<div class="status">
+<span class="badge" id="capture-state">UNKNOWN</span>
+<span class="badge" id="source">Capture source unknown</span>
+<span class="badge" id="enforcement">Mode unknown</span>
+<span class="badge" id="connection">CONNECTING</span>
+</div>
+</header>
+<div class="metrics">
+<div class="card">
+<div class="label">Packets captured</div>
+<div class="value" id="packets">—</div>
+</div>
+<div class="card">
+<div class="label" id="rate-label">Packets / second</div>
+<div class="value" id="pps">—</div>
+</div>
+<div class="card">
+<div class="label">Data rate</div>
+<div class="value" id="bps">—</div>
+</div>
+<div class="card">
+<div class="label">Total alerts · stored</div>
+<div class="value" id="alerts">—</div>
+</div>
+</div>
+<div class="metrics secondary" id="secondary">
+</div>
+<div class="grid">
+<div class="stack">
+<section class="panel">
+<div class="panel-head">
+<h2>Live Network Activity</h2>
+<span class="muted">Last 90 samples</span>
+</div>
+<div class="content">
+<div class="charts">
+<div>
+<div class="chart-title">PACKETS / SEC</div>
+<canvas id="packet-chart" role="img" aria-label="Recent packet rate">
+</canvas>
+</div>
+<div>
+<div class="chart-title">BYTES / SEC</div>
+<canvas id="byte-chart" role="img" aria-label="Recent byte rate">
+</canvas>
+</div>
+</div>
+<div id="traffic-empty" class="empty">Waiting for capture status…</div>
+<div id="activity" class="activity">
+</div>
+<div id="capture-error" role="status">
+</div>
+</div>
+</section>
+<section class="panel">
+<div class="panel-head">
+<h2>Live Alert Feed</h2>
+<span class="muted" id="feed-count">Recent 100 alerts</span>
+</div>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>Time</th>
+<th>Severity</th>
+<th>Detection</th>
+<th>Category</th>
+<th>Source IP</th>
+<th>Action</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody id="feed">
+</tbody>
+</table>
+<div class="empty" id="alert-empty">No alerts recorded</div>
+</div>
+</section>
+</div>
+<aside class="stack side">
+<section class="panel">
+<div class="panel-head">
+<h2>Threat Summary</h2>
+<span class="muted">Past 5 minutes</span>
+</div>
+<div class="content">
+<div id="threat" class="normal">UNKNOWN</div>
+<p>Display indicator from recent alert severity.</p>
+<h2>Recent Sources</h2>
+</div>
+<div id="sources">
+</div>
+</section>
+<section class="panel distribution">
+<div class="panel-head">
+<h2>Protocol Distribution</h2>
+</div>
+<div class="content" id="protocols">
+</div>
+</section>
+<section class="panel">
+<div class="panel-head">
+<h2>Blocked / Rate-limited</h2>
+<span id="block-count">0</span>
+</div>
+<div id="blocks" class="ip-list">
+</div>
+<form id="block-form">
+<div class="line">
+<input name="ip" aria-label="IP to block" placeholder="IPv4 address" required>
+<button>Block</button>
+</div>
+<input name="reason" aria-label="Block reason" placeholder="Reason (optional)">
+</form>
+</section>
+<section class="panel">
+<div class="panel-head">
+<h2>Whitelist</h2>
+<span id="white-count">0</span>
+</div>
+<div id="whitelist" class="ip-list">
+</div>
+<form id="white-form">
+<div class="line">
+<input name="ip" aria-label="IP to whitelist" placeholder="IPv4 address" required>
+<button>Allow</button>
+</div>
+<input name="note" aria-label="Whitelist note" placeholder="Host description (optional)">
+</form>
+</section>
+</aside>
+</div>
+<div class="bottom">
+<section class="panel">
+<div class="panel-head">
+<h2>Detection Categories</h2>
+<span class="muted">Loaded alerts</span>
+</div>
+<div class="content system" id="categories">
+</div>
+</section>
+<section class="panel">
+<div class="panel-head">
+<h2>System Status</h2>
+</div>
+<div class="content system">
+<div>
+<div class="label">Uptime</div>
+<p id="uptime">—</p>
+</div>
+<div>
+<div class="label">Capture mode</div>
+<p id="mode">Unknown</p>
+</div>
+<div>
+<div class="label">Whitelisted</div>
+<p id="white-total">—</p>
+</div>
+<div>
+<div class="label">Last packet received</div>
+<p id="last-packet">—</p>
+</div>
+</div>
+</section>
+</div>
+<div class="footer">SENTINELEDGE / CAPTURE → DETECT → RESPOND · Telemetry sampled every second</div>
+</main>
+<div id="toast" role="status">
+</div>
 <script>
-  // ── Utilities ──────────────────────────────────────────────────────────────
-  function toast(msg) {
-    const t = document.getElementById('toast');
-    t.textContent = msg;
-    t.classList.add('show');
-    setTimeout(() => t.classList.remove('show'), 3000);
-  }
-
-  function sevClass(s) {
-    return { high:'sev-high', medium:'sev-medium', low:'sev-low' }[s] || 'sev-low';
-  }
-  function actClass(a) {
-    return { block:'act-block', rate_limit:'act-rate_limit', alert_only:'act-alert_only' }[a] || 'act-alert_only';
-  }
-  function catClass(c) {
-    return `cat-${c}`;
-  }
-  function fmtTime(ts) {
-    try { return new Date(ts + 'Z').toLocaleTimeString(); } catch { return ts?.slice(11,19) || ''; }
-  }
-
-  // ── State ──────────────────────────────────────────────────────────────────
-  let alertRows = [];
-  let pktCount  = 0;
-  let highCount = 0;
-
-  // ── Alert rendering ────────────────────────────────────────────────────────
-  function renderAlert(a) {
-    const list = document.getElementById('alert-list');
-    const empty = list.querySelector('.empty');
-    if (empty) empty.remove();
-
-    const row = document.createElement('div');
-    row.className = 'alert-row';
-    row.innerHTML = `
-      <span class="ts">${fmtTime(a.timestamp)}</span>
-      <span class="cat ${catClass(a.category)}">${a.alert_id}</span>
-      <span class="src-ip">${a.src_ip}</span>
-      <span class="detail" title="${a.detail}">${a.detail}</span>
-      <span class="sev ${sevClass(a.severity)}">${a.severity}</span>
-      <span class="act ${actClass(a.action)}">${a.action.replace('_',' ')}</span>
-    `;
-    list.prepend(row);
-    alertRows.unshift(a);
-    if (alertRows.length > 100) {
-      alertRows.pop();
-      const last = list.lastElementChild;
-      if (last && !last.classList.contains('alert-header-row')) last.remove();
-    }
-
-    // Update stats
-    document.getElementById('stat-total').textContent = alertRows.length;
-    document.getElementById('alert-count').textContent = alertRows.length + ' alerts';
-    if (a.severity === 'high') {
-      highCount++;
-      document.getElementById('stat-high').textContent = highCount;
-    }
-    pktCount++;
-    document.getElementById('pkt-count').textContent = pktCount.toLocaleString();
-  }
-
-  // ── Block list rendering ───────────────────────────────────────────────────
-  function renderBlocks(blocks) {
-    const el = document.getElementById('block-list');
-    document.getElementById('block-count').textContent = blocks.length;
-    document.getElementById('stat-blocks').textContent = blocks.length;
-    if (!blocks.length) { el.innerHTML = '<div class="empty" style="padding:20px">No blocks</div>'; return; }
-    el.innerHTML = blocks.map(b => `
-      <div class="ip-row">
-        <div>
-          <div class="ip-addr">${b.src_ip}</div>
-          <div class="ip-meta">${b.reason || ''} · ${fmtTime(b.blocked_at)}</div>
-        </div>
-        <button class="btn-remove" onclick="removeBlock('${b.src_ip}')">Remove</button>
-      </div>
-    `).join('');
-  }
-
-  // ── Whitelist rendering ────────────────────────────────────────────────────
-  function renderWhitelist(items) {
-    const el = document.getElementById('white-list');
-    document.getElementById('white-count').textContent = items.length;
-    document.getElementById('stat-white').textContent = items.length;
-    if (!items.length) { el.innerHTML = '<div class="empty" style="padding:20px">No entries</div>'; return; }
-    el.innerHTML = items.map(w => `
-      <div class="ip-row">
-        <div>
-          <div class="ip-addr">${w.ip}</div>
-          <div class="ip-meta">${w.note || 'trusted host'}</div>
-        </div>
-        <button class="btn-remove" style="color:var(--green);border-color:rgba(34,197,94,.2);background:rgba(34,197,94,.1)"
-          onclick="removeWhitelist('${w.ip}')">Remove</button>
-      </div>
-    `).join('');
-  }
-
-  // ── API calls ──────────────────────────────────────────────────────────────
-  async function fetchAll() {
-    const [alerts, blocks, wl] = await Promise.all([
-      fetch('/api/alerts').then(r=>r.json()),
-      fetch('/api/blocks').then(r=>r.json()),
-      fetch('/api/whitelist').then(r=>r.json()),
-    ]);
-    alerts.reverse().forEach(renderAlert);
-    renderBlocks(blocks);
-    renderWhitelist(wl);
-  }
-
-  async function manualBlock() {
-    const ip = document.getElementById('block-ip-input').value.trim();
-    if (!ip) return;
-    await fetch('/api/blocks', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip, reason:'manual'}) });
-    document.getElementById('block-ip-input').value = '';
-    const blocks = await fetch('/api/blocks').then(r=>r.json());
-    renderBlocks(blocks);
-    toast(`Blocked ${ip}`);
-  }
-
-  async function removeBlock(ip) {
-    await fetch(`/api/blocks/${ip}`, { method:'DELETE' });
-    const blocks = await fetch('/api/blocks').then(r=>r.json());
-    renderBlocks(blocks);
-    toast(`Unblocked ${ip}`);
-  }
-
-  async function addWhitelist() {
-    const ip = document.getElementById('white-ip-input').value.trim();
-    if (!ip) return;
-    await fetch('/api/whitelist', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ip}) });
-    document.getElementById('white-ip-input').value = '';
-    const wl = await fetch('/api/whitelist').then(r=>r.json());
-    renderWhitelist(wl);
-    toast(`${ip} whitelisted`);
-  }
-
-  async function removeWhitelist(ip) {
-    await fetch(`/api/whitelist/${ip}`, { method:'DELETE' });
-    const wl = await fetch('/api/whitelist').then(r=>r.json());
-    renderWhitelist(wl);
-    toast(`Removed ${ip} from whitelist`);
-  }
-
-  // ── WebSocket ──────────────────────────────────────────────────────────────
-  function connectWS() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/ws`);
-
-    ws.onopen = () => {
-      document.getElementById('conn-status').textContent = '● Connected';
-      document.getElementById('conn-status').style.color = 'var(--green)';
-    };
-    ws.onmessage = async (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'alert') {
-        renderAlert(msg.data);
-        toast(`⚠ ${msg.data.alert_id} from ${msg.data.src_ip}`);
-      } else if (msg.type === 'block_added' || msg.type === 'block_removed') {
-        const blocks = await fetch('/api/blocks').then(r=>r.json());
-        renderBlocks(blocks);
-      }
-    };
-    ws.onclose = () => {
-      document.getElementById('conn-status').textContent = '○ Reconnecting…';
-      document.getElementById('conn-status').style.color = 'var(--muted)';
-      setTimeout(connectWS, 3000);
-    };
-  }
-
-  // ── Init ───────────────────────────────────────────────────────────────────
-  fetchAll();
-  connectWS();
-</script>
-</body>
-</html>
+const $=id=>document.getElementById(id), number=n=>Number.isFinite(+n)?(+n).toLocaleString(undefined,{maximumFractionDigits:1}):'—';
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function time(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?'—':d.toLocaleTimeString();}
+function bytes(n){n=Number(n)||0;const units=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<3){n/=1024;i++;}return number(n)+' '+units[i];}
+let alerts=[], totals={total_alerts:0,high_severity:0}, samples=[], latest={}, connected=false, loading=false, queued=[];
+function toast(s){$('toast').textContent=s;$('toast').style.display='block';setTimeout(()=>$('toast').style.display='none',4000);}
+async function api(path,options){const r=await fetch(path,options);if(!r.ok){let detail='Request failed';try{detail=(await r.json()).detail;}catch{}throw Error(typeof detail==='string'?detail:JSON.stringify(detail));}return r.json();}
+const secondary=[['tcp','TCP'],['udp','UDP'],['other','OTHER'],['syn-rate','SYN / SEC'],['blocked','BLOCKED IPS'],['high','HIGH SEVERITY']];
+$('secondary').innerHTML=secondary.map(([id,label])=>`<div class="card"><div class="label">${label}</div><div class="value" id="${id}">—</div></div>`).join('');
+function renderPacketStats(s,chart=true){latest=s;$('packets').textContent=number(s.total_packets);$('pps').textContent=number(s.packets_per_second);$('bps').textContent=bytes(s.bytes_per_second)+'/s';for(const p of ['tcp','udp','other'])$(p).textContent=number(s[p+'_packets']);$('syn-rate').textContent=number(s.syn_per_second);$('source').textContent=s.mode==='pcap'?'Source: '+s.pcap_file:'Interface: '+(s.interface||'unknown');$('capture-state').textContent=(s.mode==='pcap'?'PCAP REPLAY':s.mode==='live'?'LIVE':'UNKNOWN')+' · '+String(s.status||'unknown').toUpperCase();$('enforcement').textContent=s.dry_run===true?'DRY-RUN':s.dry_run===false?'LIVE RESPONSE':'Mode unknown';$('mode').textContent=s.mode==='pcap'?'PCAP replay · processing throughput':s.mode||'Unknown';$('rate-label').textContent=s.mode==='pcap'?'Replay processing / second':'Packets / second';const u=Math.max(0,Math.floor(s.uptime_seconds||0));$('uptime').textContent=[Math.floor(u/3600),Math.floor(u/60)%60,u%60].map(x=>String(x).padStart(2,'0')).join(':');$('last-packet').textContent=time(s.last_packet_timestamp);$('capture-error').textContent=s.error||'';$('traffic-empty').textContent=!connected?'Telemetry disconnected · Attempting to reconnect…':s.total_packets>0?'':s.status==='completed'?'Replay complete · No packets captured':'No network traffic detected · '+(s.mode==='live'?'Waiting for packets on '+(s.interface||'configured interface')+'…':'Waiting for replay…');$('activity').innerHTML=[['Total packets',number(s.total_packets)],['Analysed packets',number(s.analysed_packets)],['Total bytes',bytes(s.total_bytes)],['Bytes / sec',bytes(s.bytes_per_second)],['SYN packets',number(s.tcp_syn_packets)],['SYN+ACK packets',number(s.tcp_syn_ack_packets)]].map(([k,v])=>`<div><span class="label">${k}</span><strong>${v}</strong></div>`).join('');$('protocols').innerHTML=['tcp','udp','other'].map(p=>{const pct=s.total_packets?100*(s[p+'_packets']||0)/s.total_packets:0;return `<div class="row"><div><span>${p.toUpperCase()}</span><span>${number(pct)}% · ${number(s[p+'_packets'])}</span></div><section class="bar"><i style="width:${pct}%"></i></section></div>`;}).join('');if(chart){samples.push([+s.packets_per_second||0,+s.bytes_per_second||0]);if(samples.length>90)samples.shift();drawCharts();}}
+function drawCharts(){['packet-chart','byte-chart'].forEach((id,index)=>{const c=$(id),w=c.clientWidth,h=140,dpr=devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;const ctx=c.getContext('2d');ctx.scale(dpr,dpr);const max=Math.max(1,...samples.map(s=>s[index]));ctx.strokeStyle='#25344a';for(let y=20;y<h;y+=30){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}ctx.fillStyle='#94a6bd';ctx.font='11px monospace';ctx.fillText(index?bytes(max):number(max)+' p/s',5,12);ctx.strokeStyle=index?'#879cf7':'#56d9eb';ctx.lineWidth=2;ctx.beginPath();samples.forEach((s,i)=>{const x=i*w/89,y=h-10-s[index]/max*(h-35);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();});}
+function renderAlerts(){ $('alerts').textContent=number(totals.total_alerts);$('high').textContent=number(totals.high_severity);$('alert-empty').hidden=alerts.length>0;$('feed-count').textContent=alerts.length+' recent alerts';$('feed').innerHTML=alerts.map(a=>`<tr><td>${time(a.timestamp)}</td><td><span class="severity ${['high','medium','low'].includes(a.severity)?a.severity:''}">${esc(a.severity).toUpperCase()}</span></td><td>${esc(a.alert_id)}</td><td>${esc(a.category)}</td><td>${esc(a.src_ip)}</td><td>${esc(a.action)}</td><td>${esc(a.detail)}</td></tr>`).join('');const sources={},cats={};for(const a of alerts){sources[a.src_ip]=(sources[a.src_ip]||0)+1;cats[a.category]=(cats[a.category]||0)+1;}$('sources').innerHTML=Object.entries(sources).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([ip,n])=>`<div class="ip-row"><strong>${esc(ip)}</strong><span class="muted">${n} alerts</span></div>`).join('')||'<div class="empty">No recent sources</div>';$('categories').innerHTML=Object.entries(cats).map(([k,v])=>`<span class="badge">${esc(k)} · ${v}</span>`).join('')||'<span class="muted">No detections recorded</span>';renderThreat();}
+function renderThreat(){const recent=alerts.filter(a=>Date.now()-Date.parse(a.timestamp)<300000),high=recent.filter(a=>a.severity==='high').length;const level=high>=10?'CRITICAL':high?'HIGH':recent.length?'ELEVATED':'NORMAL';$('threat').textContent=connected?level:'UNKNOWN';$('threat').className=level.toLowerCase();}
+function renderAlert(a){if(a.id && alerts.some(x=>x.id===a.id))return;alerts.unshift(a);alerts=alerts.slice(0,100);if(!a.id || a.id>(totals.last_alert_id||0)){totals.total_alerts++;if(a.severity==='high')totals.high_severity++;if(a.id)totals.last_alert_id=a.id;}renderAlerts();}
+function renderList(items,kind){const isBlock=kind==='blocks';$(isBlock?'block-count':'white-count').textContent=items.length;$(isBlock?'blocked':'white-total').textContent=items.length;$(kind).replaceChildren();if(!items.length){$(kind).innerHTML='<div class="empty">No entries</div>';return;}for(const item of items){const ip=isBlock?item.src_ip:item.ip,row=document.createElement('div');row.className='ip-row';row.innerHTML=`<div><strong>${esc(ip)}</strong><small>${esc(isBlock?item.reason:item.note||'Trusted host')}${isBlock?' · Blocked at '+time(item.blocked_at):''}</small></div>`;const b=document.createElement('button');b.textContent=isBlock?'Remove block':'Remove';b.onclick=async()=>{try{await api('/api/'+kind+'/'+encodeURIComponent(ip),{method:'DELETE'});await refreshLists();}catch(e){toast(e.message);}};row.append(b);$(kind).append(row);}}
+async function refreshLists(){const [b,w]=await Promise.all([api('/api/blocks'),api('/api/whitelist')]);renderList(b,'blocks');renderList(w,'whitelist');}
+async function hydrate(){loading=true;queued=[];try{const [a,s]=await Promise.all([api('/api/alerts'),api('/api/status'),refreshLists()]);alerts=a;totals={total_alerts:s.total_alerts,high_severity:s.high_severity,last_alert_id:s.last_alert_id};renderPacketStats(s,false);renderAlerts();}finally{loading=false;if(queued.length){/* Persisted IDs deduplicate events overlapping the REST snapshot. */const pending=queued;queued=[];pending.forEach(renderAlert);}}}
+for(const [id,kind] of [['block-form','blocks'],['white-form','whitelist']])$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,body=Object.fromEntries(new FormData(form));try{await api('/api/'+kind,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});form.reset();await refreshLists();toast('Saved');}catch(err){toast(err.message);}};
+let retry=1000;
+function connectWS(){const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);ws.onopen=async()=>{connected=true;retry=1000;$('connection').textContent='● CONNECTED';try{await hydrate();}catch(e){toast(e.message);}};ws.onmessage=async e=>{try{const m=JSON.parse(e.data);if(m.type==='packet_stats')renderPacketStats(m.data);else if(m.type==='alert'){if(loading)queued.push(m.data);else renderAlert(m.data);await refreshLists();}else if(m.type==='block_added'||m.type==='block_removed')await refreshLists();}catch(err){toast(err.message);}};ws.onerror=()=>ws.close();ws.onclose=()=>{connected=false;$('connection').textContent='● DISCONNECTED · Reconnecting…';$('capture-state').textContent='CAPTURE STATUS UNKNOWN';$('traffic-empty').textContent='Telemetry disconnected · Attempting to reconnect…';renderThreat();setTimeout(connectWS,retry);retry=Math.min(retry*2,10000);};}
+window.addEventListener('resize',drawCharts);setInterval(renderThreat,10000);connectWS();
+</script></body></html>

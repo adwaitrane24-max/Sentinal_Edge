@@ -14,6 +14,8 @@ Endpoints:
 """
 import asyncio
 import json
+from pathlib import Path
+from ipaddress import IPv4Address
 from typing import List
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
@@ -23,21 +25,47 @@ from pydantic import BaseModel
 
 from .database import (
     get_alerts, get_blocks, add_block, remove_block,
-    get_whitelist, add_whitelist, remove_whitelist
+    get_whitelist, add_whitelist, remove_whitelist, is_whitelisted, get_alert_summary
 )
 
 from contextlib import asynccontextmanager
 
 _loop: asyncio.AbstractEventLoop | None = None
+_capture = None
+_dry_run = True
+
+def configure_capture(capture, dry_run: bool = True):
+    global _capture, _dry_run
+    _capture, _dry_run = capture, dry_run
+
+def capture_status() -> dict:
+    return {**(_capture.snapshot() if _capture else {"status": "starting", "mode": "unknown", "uptime_seconds": 0}),
+            "dry_run": _dry_run}
+
+async def publish_telemetry():
+    while True:
+        await manager.broadcast({"type": "packet_stats", "data": capture_status()})
+        await asyncio.sleep(1)
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
     global _loop
     _loop = asyncio.get_running_loop()
-    yield
+    task = asyncio.create_task(publish_telemetry())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        _loop = None
+        if _capture:
+            _capture.stop()
 
 app = FastAPI(title="SentinelEdge Dashboard", lifespan=lifespan)
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 # ── WebSocket connection manager ──────────────────────────────────────────────
 
@@ -50,17 +78,18 @@ class ConnectionManager:
         self._clients.append(ws)
 
     def disconnect(self, ws: WebSocket):
-        self._clients.remove(ws)
+        if ws in self._clients:
+            self._clients.remove(ws)
 
     async def broadcast(self, message: dict):
         dead = []
-        for ws in self._clients:
+        for ws in list(self._clients):
             try:
                 await ws.send_text(json.dumps(message))
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self._clients.remove(ws)
+            self.disconnect(ws)
 
 
 manager = ConnectionManager()
@@ -88,6 +117,16 @@ async def index(request: Request):
 async def api_alerts():
     return get_alerts(limit=100)
 
+@app.get("/api/status")
+async def api_status():
+    return {**capture_status(), **get_alert_summary(), "blocked_ips": len(get_blocks())}
+
+def validate_ip(ip: str):
+    try:
+        IPv4Address(ip)
+    except ValueError:
+        raise HTTPException(422, "A valid IPv4 address is required")
+
 
 @app.get("/api/blocks")
 async def api_blocks():
@@ -101,6 +140,9 @@ class BlockRequest(BaseModel):
 
 @app.post("/api/blocks")
 async def api_add_block(body: BlockRequest):
+    validate_ip(body.ip)
+    if body.ip in ("127.0.0.1", "192.168.56.1") or is_whitelisted(body.ip):
+        raise HTTPException(409, "Protected or whitelisted address")
     add_block(body.ip, body.reason)
     await manager.broadcast({"type": "block_added", "ip": body.ip})
     return {"status": "ok"}
@@ -125,6 +167,7 @@ class WhitelistRequest(BaseModel):
 
 @app.post("/api/whitelist")
 async def api_add_whitelist(body: WhitelistRequest):
+    validate_ip(body.ip)
     add_whitelist(body.ip, body.note)
     return {"status": "ok"}
 
@@ -139,7 +182,10 @@ async def api_remove_whitelist(ip: str):
 async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
+        await ws.send_json({"type": "packet_stats", "data": capture_status()})
         while True:
             await ws.receive_text()   # keep connection alive
     except WebSocketDisconnect:
+        pass
+    finally:
         manager.disconnect(ws)

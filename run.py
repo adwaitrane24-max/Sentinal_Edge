@@ -10,18 +10,14 @@ Starts:
   3. FastAPI + Uvicorn server (blocking)
 """
 import argparse
-import asyncio
-import threading
 import uvicorn
 import yaml
 
-from datetime import datetime, timezone
-
-from sentineledge.database import init_db, add_whitelist
+from sentineledge.database import init_db, add_whitelist, get_alerts
 from sentineledge.detector import Detector, FlowRecord, Alert
 from sentineledge.capture import CaptureEngine
 from sentineledge.decision import handle_alert
-from sentineledge.dashboard import app, push_alert_from_thread
+from sentineledge.dashboard import app, push_alert_from_thread, configure_capture
 
 
 def parse_args():
@@ -35,8 +31,14 @@ def parse_args():
 
 
 def load_config(path: str) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            config = yaml.safe_load(f)
+        if not isinstance(config, dict) or not isinstance(config.get("capture", {}), dict):
+            raise ValueError("configuration must contain a mapping")
+        return config
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise SystemExit(f"Unable to load configuration {path}: {exc}")
 
 
 def alert_callback(alert: Alert):
@@ -44,15 +46,8 @@ def alert_callback(alert: Alert):
     dry_run = _config.get("capture", {}).get("dry_run", True)
     handle_alert(alert, dry_run=dry_run)
 
-    alert_dict = {
-        "timestamp":  datetime.now(timezone.utc).isoformat(),
-        "alert_id":   alert.alert_id,
-        "category":   alert.category,
-        "src_ip":     alert.src_ip,
-        "detail":     alert.detail,
-        "severity":   alert.severity,
-        "action":     alert.action,
-    }
+    # Use the persisted identity and timestamp so reconnect hydration can deduplicate.
+    alert_dict = get_alerts(limit=1)[0]
     push_alert_from_thread(alert_dict)
 
 
@@ -68,6 +63,7 @@ def main():
     # CLI overrides
     if args.iface:
         _config.setdefault("capture", {})["interface"] = args.iface
+        _config["capture"]["pcap_file"] = None
     if args.pcap:
         _config.setdefault("capture", {})["pcap_file"] = args.pcap
     if args.dry_run is not None:
@@ -88,18 +84,19 @@ def main():
 
     # Start capture in background thread
     capture = CaptureEngine(_config, flow_handler)
+    configure_capture(capture, _config.get("capture", {}).get("dry_run", True))
     capture.start()
 
     dry = _config.get("capture", {}).get("dry_run", True)
     pcap = _config.get("capture", {}).get("pcap_file")
     print(f"""
-╔══════════════════════════════════════════════╗
-║         SentinelEdge NIDS — Starting         ║
-╠══════════════════════════════════════════════╣
-║  Mode   : {'DRY-RUN (log only)' if dry else 'LIVE (nftables active)'}
-║  Source  : {'PCAP: ' + pcap if pcap else 'Live: ' + _config.get('capture',{}).get('interface','eth0')}
-║  Dashboard: http://localhost:{args.port}
-╚══════════════════════════════════════════════╝
++----------------------------------------------+
+|         SentinelEdge NIDS - Starting            |
++----------------------------------------------+
+|  Mode   : {'DRY-RUN (log only)' if dry else 'LIVE (nftables active)'}
+|  Source  : {'PCAP: ' + pcap if pcap else 'Live: ' + _config.get('capture',{}).get('interface','eth0')}
+|  Dashboard: http://localhost:{args.port}
++----------------------------------------------+
 """)
 
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")

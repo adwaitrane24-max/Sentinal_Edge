@@ -5,6 +5,8 @@ Supports:
   - Offline PCAP replay (for demo/testing)
 """
 import threading
+import time
+from datetime import datetime, timezone
 from typing import Callable
 
 from scapy.all import IP, TCP, UDP, sniff, rdpcap
@@ -66,9 +68,55 @@ class CaptureEngine:
         self.pcap_file = config.get("capture", {}).get("pcap_file", None)
         self.callback = flow_callback
         self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._started = time.monotonic()
+        self._interval_start = self._started
+        self._interval = [0, 0, 0]
+        self._rates = [0.0, 0.0, 0.0]
+        self._state = "starting"
+        self._error = None
+        self._stats = dict.fromkeys(("total_packets", "analysed_packets", "total_bytes",
+                                    "tcp_packets", "udp_packets", "other_packets",
+                                    "tcp_syn_packets", "tcp_syn_ack_packets"), 0)
+        self._stats["last_packet_timestamp"] = None
+
+    def snapshot(self) -> dict:
+        """Atomic telemetry snapshot; monotonic interval rates decay during idle time."""
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._interval_start
+            if elapsed >= 1.0:
+                self._rates = [count / elapsed for count in self._interval]
+                self._interval = [0, 0, 0]
+                self._interval_start = now
+            return {**self._stats, "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "packets_per_second": self._rates[0], "bytes_per_second": self._rates[1],
+                    "syn_per_second": self._rates[2], "status": self._state,
+                    "error": self._error, "mode": "pcap" if self.pcap_file else "live",
+                    "interface": None if self.pcap_file else self.iface,
+                    "pcap_file": str(self.pcap_file) if self.pcap_file else None,
+                    "rate_basis": "replay_processing" if self.pcap_file else "live",
+                    "uptime_seconds": now - self._started}
 
     def _handle_packet(self, pkt: Packet):
-        flow = _scapy_to_flow(pkt)
+        try:
+            flow = _scapy_to_flow(pkt)
+        except (ValueError, TypeError, AttributeError, IndexError):
+            flow = None
+        length = len(pkt)
+        protocol = "tcp" if pkt.haslayer(TCP) else "udp" if pkt.haslayer(UDP) else "other"
+        syn = bool(flow and flow.is_syn)
+        with self._lock:
+            self._stats["total_packets"] += 1
+            self._stats["total_bytes"] += length
+            self._stats[protocol + "_packets"] += 1
+            self._stats["analysed_packets"] += int(flow is not None)
+            self._stats["tcp_syn_packets"] += int(syn)
+            self._stats["tcp_syn_ack_packets"] += int(bool(flow and flow.conn_success))
+            self._stats["last_packet_timestamp"] = datetime.now(timezone.utc).isoformat()
+            self._interval[0] += 1
+            self._interval[1] += length
+            self._interval[2] += int(syn)
         if flow:
             self.callback(flow)
 
@@ -78,6 +126,19 @@ class CaptureEngine:
         t.start()
 
     def _run(self):
+        with self._lock:
+            self._state = "running"
+        try:
+            self._capture()
+            with self._lock:
+                self._state = "stopped" if self._stop.is_set() else "completed"
+        except Exception as exc:
+            with self._lock:
+                self._state = "error"
+                self._error = str(exc)
+            print(f"[CAPTURE] Failed: {exc}")
+
+    def _capture(self):
         if self.pcap_file:
             print(f"[CAPTURE] Replaying PCAP: {self.pcap_file}")
             pkts = rdpcap(self.pcap_file)
@@ -88,12 +149,10 @@ class CaptureEngine:
             print(f"[CAPTURE] PCAP replay complete ({len(pkts)} packets)")
         else:
             print(f"[CAPTURE] Live sniff on interface: {self.iface}")
-            sniff(
-                iface=self.iface,
-                prn=self._handle_packet,
-                store=False,
-                stop_filter=lambda _: self._stop.is_set(),
-            )
+            if not self.iface:
+                raise ValueError("No capture interface configured")
+            sniff(iface=self.iface, prn=self._handle_packet, store=False,
+                  stop_filter=lambda _: self._stop.is_set())
 
     def stop(self):
         self._stop.set()

@@ -3,16 +3,22 @@ database.py — SQLite storage for alerts, blocks, and whitelist.
 """
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 DB_PATH = "sentineledge.db"
 _lock = threading.Lock()
 
 
+@contextmanager
 def _conn():
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
-    return c
+    try:
+        with c:
+            yield c
+    finally:
+        c.close()
 
 
 def init_db():
@@ -60,6 +66,11 @@ def get_alerts(limit=100):
             "SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+def get_alert_summary():
+    with _conn() as c:
+        row = c.execute("SELECT COUNT(*) AS total_alerts, COALESCE(MAX(id),0) AS last_alert_id, COALESCE(SUM(severity='high'),0) AS high_severity FROM alerts").fetchone()
+    return dict(row)
 
 
 # ── Blocks ───────────────────────────────────────────────────────────────────
