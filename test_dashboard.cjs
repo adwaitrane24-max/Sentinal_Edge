@@ -8,10 +8,15 @@ const el = id => {
   if (!elements.has(id)) elements.set(id, {textContent:'',innerHTML:'',style:{},className:'',hidden:false,clientWidth:400,replaceChildren(){},append(){},getContext(){return {scale(){},beginPath(){},moveTo(){},lineTo(){},stroke(){},fillText(){}};}});
   return elements.get(id);
 };
-const sockets=[], timers=[];
-class Socket {constructor(){sockets.push(this);}close(){this.onclose();}}
-const ctx = vm.createContext({document:{getElementById:el,createElement:()=>el(Math.random())},window:{addEventListener(){}},location:{protocol:'http:',host:'localhost:8000'},devicePixelRatio:1,WebSocket:Socket,setTimeout:(fn,delay)=>timers.push({fn,delay}),setInterval(){},console,fetch:async path=>({ok:true,json:async()=>path==='/api/alerts'?[]:path==='/api/status'?{total_alerts:0,high_severity:0,total_packets:0}:[]})});
+const sockets=[], timers=[], requests=[], stored={}, location={protocol:'http:',host:'localhost:8000',pathname:'/',search:'',hash:'#token=s3cret%2Bx'};
+class Socket {constructor(url){this.url=url;sockets.push(this);}close(){this.onclose();}}
+const ctx = vm.createContext({document:{getElementById:el,createElement:()=>el(Math.random())},window:{addEventListener(){}},location,history:{replaceState(_s,_t,url){location.hash='';location.url=url;}},sessionStorage:{setItem:(k,v)=>stored[k]=v,getItem:k=>stored[k]??null},devicePixelRatio:1,WebSocket:Socket,setTimeout:(fn,delay)=>timers.push({fn,delay}),setInterval(){},console,fetch:async(path,options)=>{requests.push(options);return {ok:true,json:async()=>path==='/api/alerts'?[]:path==='/api/status'?{total_alerts:0,high_severity:0,total_packets:0}:[]};}});
 vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],ctx);
+// Token from the #token= link: sent on every request and the WebSocket, then removed from the address bar
+assert.ok(requests.length>0 && requests.every(o=>o.headers.Authorization==='Bearer s3cret+x'));
+assert.equal(sockets[0].url,'ws://localhost:8000/ws?token=s3cret%2Bx');
+assert.equal(location.hash,'');
+assert.equal(stored['sentineledge-token'],'s3cret+x');
 vm.runInContext("renderPacketStats({total_packets:1000,analysed_packets:990,total_bytes:20000,packets_per_second:12,bytes_per_second:240,tcp_packets:700,udp_packets:290,other_packets:10,uptime_seconds:843,mode:'live',interface:'eth0',dry_run:true,status:'running'});renderAlert({id:1,timestamp:new Date().toISOString(),alert_id:'TEST',src_ip:'10.0.0.1',severity:'high',action:'alert_only',category:'test',detail:'<script>bad</script>'});",ctx);
 assert.equal(el('packets').textContent,'1,000');
 assert.equal(el('alerts').textContent,'1');
@@ -27,4 +32,5 @@ assert.ok(el('connection').textContent.includes('DISCONNECTED'));
 assert.equal(el('capture-state').textContent,'CAPTURE STATUS UNKNOWN');
 timers.at(-1).fn();
 assert.equal(sockets.length,2);
-console.log('Dashboard checks passed: packet/alert separation, deduplication, uptime, safe text, chart bounds, reconnect.');
+assert.equal(sockets[1].url,sockets[0].url);   // reconnect keeps the stored token
+console.log('Dashboard checks passed: packet/alert separation, deduplication, uptime, safe text, chart bounds, reconnect, access token.');

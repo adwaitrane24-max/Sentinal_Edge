@@ -23,6 +23,10 @@ class TelemetryTests(unittest.TestCase):
         self.detector = Detector({'signatures': [{'id': 'test', 'pattern': 'attack', 'severity': 'high'}]}, self.on_alert)
         self.capture = CaptureEngine({'capture': {'interface': 'test0'}}, self.detector.process)
         dashboard.configure_capture(self.capture)
+        dashboard.configure_auth('test-token')
+
+    def client(self, token='test-token'):
+        return TestClient(dashboard.app, headers={'Authorization': f'Bearer {token}'} if token else {})
 
     def tearDown(self):
         dashboard.configure_capture(None)
@@ -80,14 +84,14 @@ class TelemetryTests(unittest.TestCase):
 
     def test_status_websocket_reconnect_and_alert_schema(self):
         self.capture._handle_packet(IP()/UDP())
-        with TestClient(dashboard.app) as client:
+        with self.client() as client:
             status = client.get('/api/status').json()
             self.assertEqual(status['total_packets'], 1)
             self.assertEqual(status['total_alerts'], 0)
             self.assertTrue(status['dry_run'])
             self.assertGreaterEqual(status['uptime_seconds'], 0)
             for _ in range(2):
-                with client.websocket_connect('/ws') as ws:
+                with client.websocket_connect('/ws?token=test-token') as ws:
                     m = ws.receive_json()
                     self.assertEqual(m['type'], 'packet_stats')
                     self.assertIn('bytes_per_second', m['data'])
@@ -101,7 +105,7 @@ class TelemetryTests(unittest.TestCase):
             self.assertEqual(client.get('/').status_code, 200)
 
     def test_management_validation_and_protected_addresses(self):
-        with TestClient(dashboard.app) as client:
+        with self.client() as client:
             self.assertEqual(client.post('/api/blocks', json={'ip':'bad'}).status_code, 422)
             self.assertEqual(client.post('/api/blocks', json={'ip':'127.0.0.1'}).status_code, 409)
             self.assertEqual(client.post('/api/whitelist', json={'ip':'10.0.0.1','note':'trusted'}).status_code, 200)
@@ -203,6 +207,32 @@ class TelemetryTests(unittest.TestCase):
             c._handle_packet(p)
         self.assertEqual([a.alert_id for a in alerts], ['EXFIL-001'])
 
+    def test_api_rejects_missing_or_wrong_token(self):
+        for token in (None, 'wrong-token'):
+            with self.client(token) as client:
+                for method, path, body in [('get', '/api/alerts', None), ('get', '/api/status', None),
+                                           ('post', '/api/whitelist', {'ip': '10.0.0.66'}),
+                                           ('delete', '/api/blocks/10.0.0.66', None)]:
+                    r = client.request(method, path, json=body)
+                    self.assertEqual(r.status_code, 401, (token, method, path))
+        self.assertEqual(database.get_whitelist(), [])   # the rejected write did nothing
+        with self.client(None) as client:
+            r = client.get('/api/alerts', headers={'Authorization': 'Basic test-token'})
+            self.assertEqual(r.status_code, 401)        # only the Bearer scheme is accepted
+            self.assertEqual(client.get('/').status_code, 200)   # page itself holds no data
+
+    def test_websocket_rejects_missing_or_wrong_token(self):
+        from starlette.websockets import WebSocketDisconnect
+        with self.client(None) as client:
+            for url in ('/ws', '/ws?token=wrong-token'):
+                with self.assertRaises(WebSocketDisconnect):
+                    with client.websocket_connect(url) as ws:
+                        ws.receive_json()
+
+    def test_empty_token_is_refused(self):
+        with self.assertRaises(ValueError):
+            dashboard.configure_auth('')
+
     def test_missing_config(self):
         from run import load_config
         with self.assertRaises(SystemExit):
@@ -222,12 +252,13 @@ class TelemetryTests(unittest.TestCase):
 
     def test_status_before_capture_is_configured(self):
         dashboard.configure_capture(None)
-        with TestClient(dashboard.app) as client:
+        with self.client() as client:
             self.assertEqual(client.get('/api/status').json()['status'], 'starting')
 
     def test_entry_point_pcap_wiring_and_cli_overrides(self):
         import run
         with patch('sys.argv', ['run.py', '--pcap', 'sample.pcap', '--dry-run', '--port', '8123']), \
+             patch.dict('os.environ', {'SENTINELEDGE_TOKEN': 'env-token'}), \
              patch.object(CaptureEngine, 'start', CaptureEngine._run), \
              patch.object(run.uvicorn, 'run') as server:
             run.main()
@@ -235,6 +266,18 @@ class TelemetryTests(unittest.TestCase):
         self.assertGreater(database.get_alert_summary()['total_alerts'], 0)
         self.assertTrue(dashboard.capture_status()['dry_run'])
         self.assertEqual(server.call_args.kwargs['port'], 8123)
+        self.assertEqual(server.call_args.kwargs['host'], '127.0.0.1')   # private by default
+        self.assertTrue(dashboard.token_ok('env-token'))
+
+    def test_entry_point_host_override_and_generated_token(self):
+        import run
+        with patch('sys.argv', ['run.py', '--pcap', 'sample.pcap', '--host', '0.0.0.0']), \
+             patch.dict('os.environ', {}, clear=True), \
+             patch.object(CaptureEngine, 'start', lambda self: None), \
+             patch.object(run.uvicorn, 'run') as server:
+            run.main()
+        self.assertEqual(server.call_args.kwargs['host'], '0.0.0.0')
+        self.assertFalse(dashboard.token_ok('test-token'))   # a fresh random token replaced it
 
 
 if __name__ == '__main__':

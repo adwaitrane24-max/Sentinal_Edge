@@ -2,7 +2,10 @@
 run.py — SentinelEdge entry point.
 
 Usage:
-  python run.py [--iface eth0] [--pcap sample.pcap] [--dry-run] [--port 8000]
+  python run.py [--iface eth0] [--pcap sample.pcap] [--dry-run] [--host 127.0.0.1] [--port 8000]
+
+The dashboard needs an access token: set SENTINELEDGE_TOKEN, or a random one is
+generated and printed as part of the dashboard link at startup.
 
 Starts:
   1. SQLite DB init
@@ -10,6 +13,8 @@ Starts:
   3. FastAPI + Uvicorn server (blocking)
 """
 import argparse
+import os
+import secrets
 import uvicorn
 import yaml
 
@@ -17,7 +22,7 @@ from sentineledge.database import init_db, add_whitelist, get_alerts
 from sentineledge.detector import Detector, FlowRecord, Alert
 from sentineledge.capture import CaptureEngine
 from sentineledge.decision import handle_alert
-from sentineledge.dashboard import app, push_alert_from_thread, configure_capture
+from sentineledge.dashboard import app, push_alert_from_thread, configure_capture, configure_auth
 
 
 def parse_args():
@@ -25,6 +30,8 @@ def parse_args():
     p.add_argument("--iface",   default=None, help="Network interface for live capture")
     p.add_argument("--pcap",    default=None, help="Path to a .pcap file for replay")
     p.add_argument("--dry-run", action="store_true", default=None, help="Log-only mode (no firewall rules)")
+    p.add_argument("--host",    default="127.0.0.1",
+                   help="Dashboard bind address (default 127.0.0.1 = this machine only; 0.0.0.0 = whole network)")
     p.add_argument("--port",    type=int, default=8000, help="Dashboard port (default 8000)")
     p.add_argument("--config",  default="config.yaml", help="Config file path")
     return p.parse_args()
@@ -87,6 +94,12 @@ def main():
     configure_capture(capture, _config.get("capture", {}).get("dry_run", True))
     capture.start()
 
+    # Dashboard access token: stable if set in the environment, otherwise new each run
+    token = os.environ.get("SENTINELEDGE_TOKEN") or secrets.token_urlsafe(24)
+    configure_auth(token)
+    exposed = args.host not in ("127.0.0.1", "localhost", "::1")
+    link_host = "127.0.0.1" if args.host in ("0.0.0.0", "::", "") else args.host
+
     dry = _config.get("capture", {}).get("dry_run", True)
     pcap = _config.get("capture", {}).get("pcap_file")
     print(f"""
@@ -95,11 +108,12 @@ def main():
 +----------------------------------------------+
 |  Mode   : {'DRY-RUN (log only)' if dry else 'LIVE (nftables active)'}
 |  Source  : {'PCAP: ' + pcap if pcap else 'Live: ' + _config.get('capture',{}).get('interface','eth0')}
-|  Dashboard: http://localhost:{args.port}
+|  Listening: {args.host}:{args.port}{'  (WARNING: reachable from the network)' if exposed else '  (this machine only)'}
+|  Dashboard: http://{link_host}:{args.port}/#token={token}
 +----------------------------------------------+
 """)
 
-    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":

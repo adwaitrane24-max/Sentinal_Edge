@@ -20,7 +20,11 @@ Offline replay:
 
     python run.py --pcap sample.pcap
 
-Open http://localhost:8000 (or the port supplied with --port).
+Open the "Dashboard:" link printed at startup, e.g.
+http://127.0.0.1:8000/#token=... (the port follows --port). The dashboard API and
+WebSocket require that access token; a new random one is generated each run unless
+SENTINELEDGE_TOKEN is set. The server listens on 127.0.0.1 (this machine only) by
+default; pass --host 0.0.0.0 to expose it to the network deliberately.
 
 Packet totals are per capture session; alert totals/high severity are stored SQLite
 history. Protocol totals include non-IP packets as OTHER when applicable. Analysed
