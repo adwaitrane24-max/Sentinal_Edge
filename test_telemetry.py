@@ -112,6 +112,97 @@ class TelemetryTests(unittest.TestCase):
             self.assertEqual(client.delete('/api/blocks/10.0.0.1').status_code, 200)
             self.assertEqual(client.get('/api/blocks').json(), [])
 
+    def portscan_ips(self):
+        return [a.src_ip for a in self.alerts if a.alert_id == 'PORTSCAN-001']
+
+    def feed(self, *pkts, start=1000.0):
+        for i, p in enumerate(pkts):
+            p.time = start + i * 0.001
+            self.capture._handle_packet(p)
+
+    def test_portscan_ignores_normal_client_traffic(self):
+        c, s = '10.0.0.5', '10.0.0.1'
+        self.feed(IP(src=c, dst=s)/TCP(sport=40000, dport=443, flags='S'),
+                  IP(src=s, dst=c)/TCP(sport=443, dport=40000, flags='SA'),
+                  *[IP(src=c, dst=s)/TCP(sport=40000, dport=443, flags='PA') for _ in range(20)])
+        self.detector.flush()
+        self.assertEqual(self.portscan_ips(), [])
+
+    def test_portscan_detects_rst_answered_scan_once(self):
+        a, s = '10.0.0.66', '10.0.0.1'
+        pkts = []
+        for port in range(20, 40):
+            pkts += [IP(src=a, dst=s)/TCP(sport=50000, dport=port, flags='S'),
+                     IP(src=s, dst=a)/TCP(sport=port, dport=50000, flags='RA')]
+        self.feed(*pkts)
+        self.assertEqual(self.portscan_ips(), [a])
+
+    def test_portscan_unanswered_attempts_fail_after_timeout(self):
+        a, s = '10.0.0.66', '10.0.0.1'
+        self.feed(*[IP(src=a, dst=s)/TCP(dport=p, flags='S') for p in range(1, 6)])
+        self.assertEqual(self.portscan_ips(), [])   # replies may still arrive
+        self.feed(IP(src='10.0.0.9', dst=s)/UDP(), start=1010.0)
+        self.assertEqual(self.portscan_ips(), [a])
+
+    def test_sample_pcap_flags_only_the_port_scanner(self):
+        c = CaptureEngine({'capture': {'pcap_file': 'sample.pcap'}}, self.detector.process, self.detector.flush)
+        c._run()
+        # SYN flood (.44) and SSH brute force (.101) hit a single port, so they are not scans
+        self.assertEqual(self.portscan_ips(), ['192.168.1.77'])
+
+    def bruteforce_alerts(self):
+        return [(a.src_ip, a.action) for a in self.alerts if a.alert_id == 'BRUTEFORCE-001']
+
+    def test_bruteforce_ignores_normal_ssh_session(self):
+        c, s = '10.0.0.5', '10.0.0.1'
+        self.feed(IP(src=c, dst=s)/TCP(sport=40000, dport=22, flags='S'),
+                  IP(src=s, dst=c)/TCP(sport=22, dport=40000, flags='SA'),
+                  *[IP(src=c, dst=s)/TCP(sport=40000, dport=22, flags='PA') for _ in range(50)])
+        self.assertEqual(self.bruteforce_alerts(), [])
+
+    def test_bruteforce_ignores_syn_retransmits(self):
+        c, s = '10.0.0.5', '10.0.0.1'
+        self.feed(*[IP(src=c, dst=s)/TCP(sport=40000, dport=22, flags='S') for _ in range(12)])
+        self.assertEqual(self.bruteforce_alerts(), [])
+
+    def test_bruteforce_alerts_once_per_level(self):
+        a, s = '10.0.0.66', '10.0.0.1'
+        self.feed(*[IP(src=a, dst=s)/TCP(sport=50000 + i, dport=22, flags='S') for i in range(15)])
+        self.assertEqual(self.bruteforce_alerts(), [(a, 'alert_only'), (a, 'block')])
+
+    def test_sample_pcap_bruteforce_alerts_once(self):
+        c = CaptureEngine({'capture': {'pcap_file': 'sample.pcap'}}, self.detector.process, self.detector.flush)
+        c._run()
+        self.assertEqual(self.bruteforce_alerts(), [('192.168.1.101', 'alert_only')])
+
+    def test_repeated_signature_alerts_are_suppressed(self):
+        a, b, s = '10.0.0.66', '10.0.0.67', '10.0.0.1'
+        self.feed(*[IP(src=a, dst=s)/UDP()/Raw(load=b'attack') for _ in range(20)],
+                  IP(src=b, dst=s)/UDP()/Raw(load=b'attack'))
+        self.assertEqual([x.src_ip for x in self.alerts], [a, b])   # other sources still alert
+        self.feed(IP(src=a, dst=s)/UDP()/Raw(load=b'attack'), start=1061.0)
+        self.assertEqual([x.src_ip for x in self.alerts], [a, b, a])   # window expired
+
+    def test_suppression_can_be_disabled(self):
+        alerts = []
+        d = Detector({'alerts': {'suppress_sec': 0},
+                      'signatures': [{'id': 'test', 'pattern': 'attack', 'severity': 'high'}]}, alerts.append)
+        c = CaptureEngine({'capture': {'interface': 'test0'}}, d.process)
+        for _ in range(5):
+            c._handle_packet(IP()/UDP()/Raw(load=b'attack'))
+        self.assertEqual(len(alerts), 5)
+
+    def test_exfil_does_not_alert_on_every_packet(self):
+        alerts = []
+        d = Detector({'rules': [{'id': 'EXFIL-001', 'enabled': True,
+                                 'params': {'absolute_floor_bytes': 1000}}]}, alerts.append)
+        c = CaptureEngine({'capture': {'interface': 'test0'}}, d.process)
+        for i in range(50):
+            p = IP(src='10.0.0.66', dst='10.0.0.1')/UDP()/Raw(load=b'x' * 200)
+            p.time = 1000.0 + i * 0.001
+            c._handle_packet(p)
+        self.assertEqual([a.alert_id for a in alerts], ['EXFIL-001'])
+
     def test_missing_config(self):
         from run import load_config
         with self.assertRaises(SystemExit):

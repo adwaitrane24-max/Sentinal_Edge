@@ -83,7 +83,7 @@ def main():
         detector.process(flow)
 
     # Start capture in background thread
-    capture = CaptureEngine(_config, flow_handler)
+    capture = CaptureEngine(_config, flow_handler, end_callback=detector.flush)
     configure_capture(capture, _config.get("capture", {}).get("dry_run", True))
     capture.start()
 

@@ -5,6 +5,9 @@ capture:
   pcap_file: null            # set to a .pcap path for offline replay, e.g. "sample.pcap"
   dry_run: true              # true = log only; false = apply nftables rules
 
+alerts:
+  suppress_sec: 60           # drop repeats of the same rule + IP + action within this window; 0 = off
+
 whitelist:
   - "127.0.0.1"
   - "192.168.56.1"           # VirtualBox host IP — never block this

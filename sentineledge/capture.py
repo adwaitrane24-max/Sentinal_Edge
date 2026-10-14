@@ -59,14 +59,17 @@ def _scapy_to_flow(pkt: Packet) -> FlowRecord | None:
         length=length,
         is_syn=is_syn,
         conn_success=conn_success,
+        timestamp=float(pkt.time),
     )
 
 
 class CaptureEngine:
-    def __init__(self, config: dict, flow_callback: Callable[[FlowRecord], None]):
+    def __init__(self, config: dict, flow_callback: Callable[[FlowRecord], None],
+                 end_callback: Callable[[], None] | None = None):
         self.iface = config.get("capture", {}).get("interface", "eth0")
         self.pcap_file = config.get("capture", {}).get("pcap_file", None)
         self.callback = flow_callback
+        self.end_callback = end_callback   # called once the packet source is exhausted
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._started = time.monotonic()
@@ -153,6 +156,8 @@ class CaptureEngine:
                 raise ValueError("No capture interface configured")
             sniff(iface=self.iface, prn=self._handle_packet, store=False,
                   stop_filter=lambda _: self._stop.is_set())
+        if self.end_callback:
+            self.end_callback()
 
     def stop(self):
         self._stop.set()
