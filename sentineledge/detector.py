@@ -158,38 +158,66 @@ class TRWState:
 # ── 3. EWMA SYN-flood detector ────────────────────────────────────────────────
 
 class EWMAFloodDetector:
-    """Dynamic threshold based on SYNGuard (Rahouti et al., 2021)."""
+    """Per-victim SYN-flood detector with a dynamic threshold (after SYNGuard, Rahouti et al., 2021).
 
-    def __init__(self, lam=0.2, k_sigma=4, hard_ceiling=150, window_sec=1.0):
+    SYNs are counted per destination IP in fixed windows of packet time. A window
+    is a flood once its count exceeds hard_ceiling, or — after warmup_windows of
+    baseline — max(EWMA + k·σ, min_rate), both per second × window_sec. The check
+    runs on every SYN, so floods are caught mid-window. The flood is blamed on each
+    source that sent at least `share` of the window's SYNs; if none did (spoofed or
+    distributed), the victim is reported instead. Flood windows stay out of the baseline.
+    """
+
+    def __init__(self, lam=0.2, k_sigma=4, hard_ceiling=150, window_sec=1.0,
+                 min_rate=20, warmup_windows=5, share=0.2):
         self.lam = lam
         self.k_sigma = k_sigma
         self.hard_ceiling = hard_ceiling
         self.window_sec = window_sec
+        self.min_rate = min_rate
+        self.warmup_windows = warmup_windows
+        self.share = share
+        self._victims: dict[str, dict] = {}
 
-        self._ewma = 0.0
-        self._ewmv = 0.0          # exponentially weighted variance
-        self._count = 0
-        self._window_start = time.time()
+    def update(self, flow: FlowRecord) -> List[tuple]:
+        """Feed one packet; return [(ip, is_victim), ...] when a flood is first detected in a window."""
+        if not flow.is_syn:
+            return []
+        now = flow.timestamp or time.time()
+        v = self._victims.get(flow.dst_ip)
+        if v is None:
+            if len(self._victims) > 10_000:   # forget victims idle for 10 minutes
+                self._victims = {ip: s for ip, s in self._victims.items() if now - s["start"] < 600}
+            v = self._victims[flow.dst_ip] = {"start": now, "count": 0, "sources": defaultdict(int),
+                                              "alerted": False, "ewma": 0.0, "ewmv": 0.0, "windows": 0}
+        elif now - v["start"] >= self.window_sec:
+            self._close_window(v, now)
 
-    def update(self, is_syn: bool) -> bool:
-        """Call for every packet. Returns True if SYN flood detected."""
-        if is_syn:
-            self._count += 1
-        now = time.time()
-        elapsed = now - self._window_start
-        if elapsed >= self.window_sec:
-            rate = self._count / elapsed
-            # Update EWMA and EWMV
-            delta = rate - self._ewma
-            self._ewma += self.lam * delta
-            self._ewmv = (1 - self.lam) * (self._ewmv + self.lam * delta ** 2)
-            sigma = math.sqrt(self._ewmv) if self._ewmv > 0 else 1.0
-            threshold = self._ewma + self.k_sigma * sigma
-            # Reset window
-            self._count = 0
-            self._window_start = now
-            return rate > threshold or rate > self.hard_ceiling
-        return False
+        v["count"] += 1
+        v["sources"][flow.src_ip] += 1
+        if v["alerted"] or v["count"] <= self._limit_per_sec(v) * self.window_sec:
+            return []
+        v["alerted"] = True
+        offenders = [ip for ip, n in v["sources"].items() if n >= self.share * v["count"]]
+        return [(ip, False) for ip in offenders] or [(flow.dst_ip, True)]
+
+    def _limit_per_sec(self, v: dict) -> float:
+        if v["windows"] < self.warmup_windows:
+            return self.hard_ceiling                 # still learning the baseline
+        dynamic = v["ewma"] + self.k_sigma * math.sqrt(v["ewmv"])
+        return min(self.hard_ceiling, max(dynamic, self.min_rate))
+
+    def _close_window(self, v: dict, now: float):
+        if not v["alerted"]:                         # flood windows would poison the baseline
+            rate = v["count"] / (now - v["start"])
+            if v["windows"] == 0:
+                v["ewma"] = rate
+            else:
+                delta = rate - v["ewma"]
+                v["ewma"] += self.lam * delta
+                v["ewmv"] = (1 - self.lam) * (v["ewmv"] + self.lam * delta ** 2)
+            v["windows"] += 1
+        v.update(start=now, count=0, sources=defaultdict(int), alerted=False)
 
 
 # ── 4. Brute-force detector ───────────────────────────────────────────────────
@@ -289,6 +317,10 @@ class Detector:
             lam=ewma_cfg.get("lambda", 0.2),
             k_sigma=ewma_cfg.get("k_sigma", 4),
             hard_ceiling=ewma_cfg.get("hard_ceiling_per_sec", 150),
+            window_sec=ewma_cfg.get("window_sec", 1.0),
+            min_rate=ewma_cfg.get("min_rate_per_sec", 20),
+            warmup_windows=ewma_cfg.get("warmup_windows", 5),
+            share=ewma_cfg.get("source_share", 0.2),
         )
 
         bf_cfg = rules.get("BRUTEFORCE-001", {}).get("params", {})
@@ -328,16 +360,18 @@ class Detector:
         for scanner_ip in self.trw.observe(flow):
             self._portscan_alert(scanner_ip)
 
-        # 3. EWMA SYN flood
-        if self.ewma.update(flow.is_syn):
+        # 3. EWMA SYN flood: per victim, blamed on the sources that sent most of it
+        for ip, is_victim in self.ewma.update(flow):
             r = self._rules.get("SYNFLOOD-001", {})
             self._emit(Alert(
                 alert_id="SYNFLOOD-001",
                 category="dos",
-                src_ip=flow.src_ip,
-                detail="SYN rate exceeded EWMA baseline + 4σ",
+                src_ip=ip,
+                detail=(f"Distributed SYN flood against {ip}: no dominant source" if is_victim
+                        else f"SYN flood against {flow.dst_ip} exceeded its threshold"),
                 severity=r.get("severity", "high"),
-                action=r.get("action", "block"),
+                # Blocking the victim or a random spoofed source would not help
+                action="alert_only" if is_victim else r.get("action", "block"),
             ))
 
         # 4. Brute force: each new connection (SYN) to an auth service is one login attempt

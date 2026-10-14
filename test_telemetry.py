@@ -207,6 +207,41 @@ class TelemetryTests(unittest.TestCase):
             c._handle_packet(p)
         self.assertEqual([a.alert_id for a in alerts], ['EXFIL-001'])
 
+    def synflood_alerts(self):
+        return [(a.src_ip, a.action) for a in self.alerts if a.alert_id == 'SYNFLOOD-001']
+
+    def syns(self, sources, dst='10.0.0.1', start=1000.0, spacing=0.001):
+        for i, src in enumerate(sources):
+            p = IP(src=src, dst=dst)/TCP(sport=20000 + i % 40000, dport=80, flags='S')
+            p.time = start + i * spacing
+            self.capture._handle_packet(p)
+
+    def test_sample_pcap_synflood_blames_the_flooder(self):
+        c = CaptureEngine({'capture': {'pcap_file': 'sample.pcap'}}, self.detector.process, self.detector.flush)
+        c._run()
+        self.assertEqual(self.synflood_alerts(), [('192.168.1.44', 'block')])
+
+    def test_synflood_does_not_blame_bystanders(self):
+        attacker, bystander = '10.0.0.66', '10.0.0.5'
+        self.syns([bystander] + [attacker] * 200 + [bystander])
+        self.assertEqual(self.synflood_alerts(), [(attacker, 'block')])
+
+    def test_synflood_ignores_busy_but_normal_traffic(self):
+        # 20 clients x 5 connections inside one second stays under the 150/s ceiling
+        self.syns([f'10.0.1.{i}' for i in range(20)] * 5)
+        self.assertEqual(self.synflood_alerts(), [])
+
+    def test_distributed_synflood_reports_victim_without_blocking(self):
+        self.syns([f'10.{i // 250}.{i % 250}.9' for i in range(300)])
+        self.assertEqual(self.synflood_alerts(), [('10.0.0.1', 'alert_only')])
+
+    def test_synflood_dynamic_threshold_after_baseline(self):
+        # 10 quiet seconds at 10 SYN/s teach the baseline; then 60 SYNs in one second
+        self.syns([f'10.0.1.{i % 50}' for i in range(100)], spacing=0.1)
+        self.assertEqual(self.synflood_alerts(), [])
+        self.syns(['10.0.0.66'] * 60, start=1010.0, spacing=0.01)
+        self.assertEqual(self.synflood_alerts(), [('10.0.0.66', 'block')])   # 60 < 150 ceiling
+
     def test_api_rejects_missing_or_wrong_token(self):
         for token in (None, 'wrong-token'):
             with self.client(token) as client:
