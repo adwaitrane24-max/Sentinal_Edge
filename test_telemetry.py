@@ -202,10 +202,41 @@ class TelemetryTests(unittest.TestCase):
                                  'params': {'absolute_floor_bytes': 1000}}]}, alerts.append)
         c = CaptureEngine({'capture': {'interface': 'test0'}}, d.process)
         for i in range(50):
-            p = IP(src='10.0.0.66', dst='10.0.0.1')/UDP()/Raw(load=b'x' * 200)
+            p = IP(src='10.0.0.66', dst='8.8.8.8')/UDP()/Raw(load=b'x' * 200)
             p.time = 1000.0 + i * 0.001
             c._handle_packet(p)
         self.assertEqual([a.alert_id for a in alerts], ['EXFIL-001'])
+
+    # ── Exfiltration (fix #7) ──
+    def exfil_run(self, schedule, params=None):
+        """schedule: [(minute, src, dst, packets)], 1000-byte payloads; returns alerting sources."""
+        alerts = []
+        d = Detector({'rules': [{'id': 'EXFIL-001', 'enabled': True, 'params': {
+            'window_sec': 60, 'multiplier': 5, 'absolute_floor_bytes': 2000, **(params or {})}}]}, alerts.append)
+        c = CaptureEngine({'capture': {'interface': 'test0'}}, d.process)
+        for minute, src, dst, n in schedule:
+            for i in range(n):
+                p = IP(src=src, dst=dst)/UDP()/Raw(load=b'x' * 1000)
+                p.time = 60_000.0 + minute * 60 + i * 0.01
+                c._handle_packet(p)
+        return [a.src_ip for a in alerts if a.alert_id == 'EXFIL-001']
+
+    def test_exfil_flags_spike_above_host_baseline_once(self):
+        quiet = [(m, '10.0.0.5', '8.8.8.8', 1) for m in range(10)]      # ~1 KB/min for 10 min
+        self.assertEqual(self.exfil_run(quiet + [(10, '10.0.0.5', '8.8.8.8', 10)]), ['10.0.0.5'])
+
+    def test_exfil_steady_traffic_alerts_only_before_a_baseline_exists(self):
+        # ~2 KB/min every minute is above the 1 KB floor, but only the very first minute
+        # (no history yet, so only the floor applies) counts; after that it's normal
+        steady = [(m, '10.0.0.5', '8.8.8.8', 2) for m in range(20)]
+        self.assertEqual(self.exfil_run(steady, {'absolute_floor_bytes': 1000}), ['10.0.0.5'])
+
+    def test_exfil_counts_only_internal_to_external(self):
+        self.assertEqual(self.exfil_run([(0, '10.0.0.5', '10.0.0.9', 50),      # LAN copy
+                                         (0, '8.8.8.8', '10.0.0.5', 50)]), [])  # download
+        # With a narrower internal range, another private network counts as outside
+        self.assertEqual(self.exfil_run([(0, '10.0.0.5', '10.0.1.9', 50)],
+                                        {'internal_networks': ['10.0.0.0/24']}), ['10.0.0.5'])
 
     def synflood_alerts(self):
         return [(a.src_ip, a.action) for a in self.alerts if a.alert_id == 'SYNFLOOD-001']

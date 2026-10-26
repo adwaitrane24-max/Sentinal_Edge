@@ -1,5 +1,5 @@
 """
-detector.py — All 4 detection algorithms.
+detector.py — All 5 detection algorithms.
 
   1. Aho-Corasick   — payload signature matching
   2. TRW            — port-scan detection (sequential hypothesis testing)
@@ -9,8 +9,9 @@ detector.py — All 4 detection algorithms.
 """
 import math
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from ipaddress import ip_address, ip_network
 from typing import Callable, List, Optional
 
 import ahocorasick
@@ -269,27 +270,72 @@ class BruteForceDetector:
 # ── 5. Exfiltration volume monitor ───────────────────────────────────────────
 
 class ExfilDetector:
-    """Flags internal IPs whose outbound bytes spike far above their own baseline."""
+    """Flags internal hosts whose outbound volume spikes far above their own baseline.
 
-    def __init__(self, multiplier=5, window_sec=300, floor_bytes=524_288_000):
+    Only internal → external traffic counts (internal = internal_networks, default
+    every private address range). Bytes are summed into per-minute buckets of packet
+    time, kept for 24 h per host with running totals, so each packet costs O(1).
+    The last window_sec is a spike when it exceeds both multiplier × the host's
+    average per-window volume over the rest of that history and floor_bytes.
+    Reports once per spike, re-arming when the volume drops back under the threshold.
+    """
+
+    BUCKET_SEC = 60
+    HISTORY_SEC = 86_400
+
+    def __init__(self, multiplier=5, window_sec=300, floor_bytes=524_288_000, internal_networks=None):
         self.multiplier = multiplier
-        self.window_sec = window_sec
         self.floor_bytes = floor_bytes
-        # {ip: [(timestamp, bytes)]}
-        self._log: dict = defaultdict(list)
+        self.window_slots = max(1, int(window_sec // self.BUCKET_SEC))
+        self.history_slots = self.HISTORY_SEC // self.BUCKET_SEC
+        self._nets = [ip_network(n) for n in internal_networks] if internal_networks else None
+        self._internal_cache: dict[str, bool] = {}
+        # {ip: {"first": slot, "recent"/"older": deque[[slot, bytes]], sums, "spiking"}}
+        self._hosts: dict[str, dict] = {}
 
-    def record(self, src_ip: str, byte_count: int) -> bool:
-        now = time.time()
-        self._log[src_ip].append((now, byte_count))
-        # Keep last 24 h of data
-        cutoff_24h = now - 86_400
-        self._log[src_ip] = [(t, b) for t, b in self._log[src_ip] if t >= cutoff_24h]
+    def _internal(self, ip: str) -> bool:
+        hit = self._internal_cache.get(ip)
+        if hit is None:
+            if len(self._internal_cache) > 100_000:
+                self._internal_cache.clear()
+            addr = ip_address(ip)
+            hit = any(addr in n for n in self._nets) if self._nets else addr.is_private
+            self._internal_cache[ip] = hit
+        return hit
 
-        cutoff_win = now - self.window_sec
-        recent = sum(b for t, b in self._log[src_ip] if t >= cutoff_win)
-        baseline = sum(b for _, b in self._log[src_ip]) / max(len(self._log[src_ip]), 1)
-        threshold = max(baseline * self.multiplier, self.floor_bytes)
-        return recent > threshold
+    def record(self, flow: FlowRecord) -> bool:
+        """Feed one packet; True when its source starts an outbound spike."""
+        if not self._internal(flow.src_ip) or self._internal(flow.dst_ip):
+            return False
+        slot = int((flow.timestamp or time.time()) // self.BUCKET_SEC)
+        h = self._hosts.get(flow.src_ip)
+        if h is None:
+            if len(self._hosts) > 10_000:   # forget hosts silent for a whole history
+                self._hosts = {ip: s for ip, s in self._hosts.items()
+                               if s["recent"][-1][0] > slot - self.history_slots}
+            h = self._hosts[flow.src_ip] = {"first": slot, "recent": deque(), "older": deque(),
+                                            "recent_sum": 0, "older_sum": 0, "spiking": False}
+
+        recent, older = h["recent"], h["older"]
+        if recent and recent[-1][0] >= slot:      # same minute (or slightly out of order)
+            recent[-1][1] += flow.length
+        else:
+            recent.append([slot, flow.length])
+        h["recent_sum"] += flow.length
+        while recent[0][0] <= slot - self.window_slots:      # slide minutes out of the window
+            s, b = recent.popleft()
+            h["recent_sum"] -= b
+            older.append((s, b))
+            h["older_sum"] += b
+        while older and older[0][0] <= slot - self.history_slots:
+            h["older_sum"] -= older.popleft()[1]
+
+        # Average volume per window over the history before the current window
+        span = (slot - self.window_slots) - max(h["first"], slot - self.history_slots) + 1
+        baseline = h["older_sum"] * self.window_slots / span if span > 0 else 0.0
+        spike = h["recent_sum"] > max(self.multiplier * baseline, self.floor_bytes)
+        started, h["spiking"] = spike and not h["spiking"], spike
+        return started
 
 
 # ── Detector orchestrator ─────────────────────────────────────────────────────
@@ -336,6 +382,7 @@ class Detector:
             multiplier=exfil_cfg.get("multiplier", 5),
             window_sec=exfil_cfg.get("window_sec", 300),
             floor_bytes=exfil_cfg.get("absolute_floor_bytes", 524_288_000),
+            internal_networks=exfil_cfg.get("internal_networks"),
         )
 
         self._rules = rules
@@ -390,14 +437,15 @@ class Detector:
                     action=r.get("action", "block") if result == "block" else "alert_only",
                 ))
 
-        # 5. Exfiltration check
-        if self.exfil.record(flow.src_ip, flow.length):
+        # 5. Exfiltration: internal host's outbound volume far above its own baseline
+        if self.exfil.record(flow):
             r = self._rules.get("EXFIL-001", {})
             self._emit(Alert(
                 alert_id="EXFIL-001",
                 category="exfil",
                 src_ip=flow.src_ip,
-                detail="Outbound volume exceeds 5× 24h baseline",
+                detail=(f"Outbound volume over {self.exfil.window_slots} min exceeds "
+                        f"{self.exfil.multiplier}x this host's 24h baseline"),
                 severity=r.get("severity", "medium"),
                 action=r.get("action", "alert_only"),
             ))

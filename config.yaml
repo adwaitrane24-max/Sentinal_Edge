@@ -55,9 +55,10 @@ rules:
     category: exfil
     algorithm: exfil_volume
     params:
-      multiplier: 5
-      window_sec: 300
-      absolute_floor_bytes: 524288000   # 500 MB
+      multiplier: 5                     # spike = this many times the host's own 24 h average
+      window_sec: 300                   # measured in whole minutes
+      absolute_floor_bytes: 524288000   # 500 MB; never alert below this
+      # internal_networks: ["192.168.56.0/24"]   # default: every private address range
     severity: medium
     action: alert_only
     enabled: true
