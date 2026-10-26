@@ -231,6 +231,27 @@ form .line {
   border-radius:8px;
   max-width:400px;
   display:none}
+td a {
+  color:var(--cyan)}
+#auth {
+  border:1px solid var(--red);
+  border-radius:8px;
+  padding:16px 18px;
+  margin:0 0 16px;
+  background:#1a1424}
+#auth h2 {
+  margin:0 0 8px;
+  color:var(--red)}
+#auth code {
+  color:var(--cyan);
+  overflow-wrap:anywhere}
+#auth form {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:12px}
+#auth input {
+  flex:1 1 280px}
 #traffic-empty {
   padding:12px 0 0;
   text-align:left}
@@ -288,6 +309,17 @@ header {
 <span class="badge" id="connection">CONNECTING</span>
 </div>
 </header>
+<section id="auth" role="alert" hidden>
+<h2>Access token needed</h2>
+<p id="auth-reason">This dashboard is protected and this tab has no access token.</p>
+<p>Look in the terminal where you started SentinelEdge (<code>python run.py ...</code>) for the line<br>
+<code>Dashboard: http://127.0.0.1:8000/#token=...</code><br>
+and open that exact link, or paste it below. The token changes every time SentinelEdge restarts.</p>
+<form id="auth-form">
+<input name="token" aria-label="Dashboard link or access token" placeholder="Paste the Dashboard link (or just the token)" required>
+<button>Connect</button>
+</form>
+</section>
 <div class="metrics">
 <div class="card">
 <div class="label">Packets captured</div>
@@ -347,6 +379,7 @@ header {
 <th>Time</th>
 <th>Severity</th>
 <th>Detection</th>
+<th>ATT&amp;CK</th>
 <th>Category</th>
 <th>Source IP</th>
 <th>Action</th>
@@ -453,16 +486,21 @@ header {
 <script>
 const $=id=>document.getElementById(id), number=n=>Number.isFinite(+n)?(+n).toLocaleString(undefined,{maximumFractionDigits:1}):'—';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* MITRE ATT&CK id -> link to its official page; anything not shaped like an id is shown as plain text. */
+function mitreLink(id){const m=/^(TA\d{4}|T\d{4})(?:\.(\d{3}))?$/.exec(id||'');if(!m)return id?esc(id):'—';const url=m[1].startsWith('TA')?`https://attack.mitre.org/tactics/${m[1]}/`:`https://attack.mitre.org/techniques/${m[1]}/${m[2]?m[2]+'/':''}`;return `<a href="${url}" target="_blank" rel="noopener noreferrer">${esc(id)}</a>`;}
 function time(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?'—':d.toLocaleTimeString();}
 function bytes(n){n=Number(n)||0;const units=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<3){n/=1024;i++;}return number(n)+' '+units[i];}
 let alerts=[], totals={total_alerts:0,high_severity:0}, samples=[], latest={}, connected=false, loading=false, queued=[];
 function toast(s){$('toast').textContent=s;$('toast').style.display='block';setTimeout(()=>$('toast').style.display='none',4000);}
-async function api(path,options){const r=await fetch(path,options);if(!r.ok){let detail='Request failed';try{detail=(await r.json()).detail;}catch{}throw Error(typeof detail==='string'?detail:JSON.stringify(detail));}return r.json();}
+/* Access token: read from the #token= link printed at startup, kept for this tab, then hidden from the address bar. */
+function readToken(){const m=/(?:^#|&)token=([^&]*)/.exec(location.hash||''),t=m?decodeURIComponent(m[1]):'';try{if(t){sessionStorage.setItem('sentineledge-token',t);history.replaceState(null,'',location.pathname+location.search);}else return sessionStorage.getItem('sentineledge-token')||'';}catch{}return t;}
+const token=readToken(), AUTH_HELP='Access token missing or invalid - open the dashboard link printed in the terminal.';
+async function api(path,options={}){const r=await fetch(path,{...options,headers:{...options.headers,Authorization:'Bearer '+token}});if(r.status===401)throw Object.assign(Error(AUTH_HELP),{auth:true});if(!r.ok){let detail='Request failed';try{detail=(await r.json()).detail;}catch{}throw Error(typeof detail==='string'?detail:JSON.stringify(detail));}return r.json();}
 const secondary=[['tcp','TCP'],['udp','UDP'],['other','OTHER'],['syn-rate','SYN / SEC'],['blocked','BLOCKED IPS'],['high','HIGH SEVERITY']];
 $('secondary').innerHTML=secondary.map(([id,label])=>`<div class="card"><div class="label">${label}</div><div class="value" id="${id}">—</div></div>`).join('');
 function renderPacketStats(s,chart=true){latest=s;$('packets').textContent=number(s.total_packets);$('pps').textContent=number(s.packets_per_second);$('bps').textContent=bytes(s.bytes_per_second)+'/s';for(const p of ['tcp','udp','other'])$(p).textContent=number(s[p+'_packets']);$('syn-rate').textContent=number(s.syn_per_second);$('source').textContent=s.mode==='pcap'?'Source: '+s.pcap_file:'Interface: '+(s.interface||'unknown');$('capture-state').textContent=(s.mode==='pcap'?'PCAP REPLAY':s.mode==='live'?'LIVE':'UNKNOWN')+' · '+String(s.status||'unknown').toUpperCase();$('enforcement').textContent=s.dry_run===true?'DRY-RUN':s.dry_run===false?'LIVE RESPONSE':'Mode unknown';$('mode').textContent=s.mode==='pcap'?'PCAP replay · processing throughput':s.mode||'Unknown';$('rate-label').textContent=s.mode==='pcap'?'Replay processing / second':'Packets / second';const u=Math.max(0,Math.floor(s.uptime_seconds||0));$('uptime').textContent=[Math.floor(u/3600),Math.floor(u/60)%60,u%60].map(x=>String(x).padStart(2,'0')).join(':');$('last-packet').textContent=time(s.last_packet_timestamp);$('capture-error').textContent=s.error||'';$('traffic-empty').textContent=!connected?'Telemetry disconnected · Attempting to reconnect…':s.total_packets>0?'':s.status==='completed'?'Replay complete · No packets captured':'No network traffic detected · '+(s.mode==='live'?'Waiting for packets on '+(s.interface||'configured interface')+'…':'Waiting for replay…');$('activity').innerHTML=[['Total packets',number(s.total_packets)],['Analysed packets',number(s.analysed_packets)],['Total bytes',bytes(s.total_bytes)],['Bytes / sec',bytes(s.bytes_per_second)],['SYN packets',number(s.tcp_syn_packets)],['SYN+ACK packets',number(s.tcp_syn_ack_packets)]].map(([k,v])=>`<div><span class="label">${k}</span><strong>${v}</strong></div>`).join('');$('protocols').innerHTML=['tcp','udp','other'].map(p=>{const pct=s.total_packets?100*(s[p+'_packets']||0)/s.total_packets:0;return `<div class="row"><div><span>${p.toUpperCase()}</span><span>${number(pct)}% · ${number(s[p+'_packets'])}</span></div><section class="bar"><i style="width:${pct}%"></i></section></div>`;}).join('');if(chart){samples.push([+s.packets_per_second||0,+s.bytes_per_second||0]);if(samples.length>90)samples.shift();drawCharts();}}
 function drawCharts(){['packet-chart','byte-chart'].forEach((id,index)=>{const c=$(id),w=c.clientWidth,h=140,dpr=devicePixelRatio||1;c.width=w*dpr;c.height=h*dpr;const ctx=c.getContext('2d');ctx.scale(dpr,dpr);const max=Math.max(1,...samples.map(s=>s[index]));ctx.strokeStyle='#25344a';for(let y=20;y<h;y+=30){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}ctx.fillStyle='#94a6bd';ctx.font='11px monospace';ctx.fillText(index?bytes(max):number(max)+' p/s',5,12);ctx.strokeStyle=index?'#879cf7':'#56d9eb';ctx.lineWidth=2;ctx.beginPath();samples.forEach((s,i)=>{const x=i*w/89,y=h-10-s[index]/max*(h-35);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();});}
-function renderAlerts(){ $('alerts').textContent=number(totals.total_alerts);$('high').textContent=number(totals.high_severity);$('alert-empty').hidden=alerts.length>0;$('feed-count').textContent=alerts.length+' recent alerts';$('feed').innerHTML=alerts.map(a=>`<tr><td>${time(a.timestamp)}</td><td><span class="severity ${['high','medium','low'].includes(a.severity)?a.severity:''}">${esc(a.severity).toUpperCase()}</span></td><td>${esc(a.alert_id)}</td><td>${esc(a.category)}</td><td>${esc(a.src_ip)}</td><td>${esc(a.action)}</td><td>${esc(a.detail)}</td></tr>`).join('');const sources={},cats={};for(const a of alerts){sources[a.src_ip]=(sources[a.src_ip]||0)+1;cats[a.category]=(cats[a.category]||0)+1;}$('sources').innerHTML=Object.entries(sources).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([ip,n])=>`<div class="ip-row"><strong>${esc(ip)}</strong><span class="muted">${n} alerts</span></div>`).join('')||'<div class="empty">No recent sources</div>';$('categories').innerHTML=Object.entries(cats).map(([k,v])=>`<span class="badge">${esc(k)} · ${v}</span>`).join('')||'<span class="muted">No detections recorded</span>';renderThreat();}
+function renderAlerts(){ $('alerts').textContent=number(totals.total_alerts);$('high').textContent=number(totals.high_severity);$('alert-empty').hidden=alerts.length>0;$('feed-count').textContent=alerts.length+' recent alerts';$('feed').innerHTML=alerts.map(a=>`<tr><td>${time(a.timestamp)}</td><td><span class="severity ${['high','medium','low'].includes(a.severity)?a.severity:''}">${esc(a.severity).toUpperCase()}</span></td><td>${esc(a.alert_id)}</td><td>${mitreLink(a.mitre)}</td><td>${esc(a.category)}</td><td>${esc(a.src_ip)}</td><td>${esc(a.action)}</td><td>${esc(a.detail)}</td></tr>`).join('');const sources={},cats={};for(const a of alerts){sources[a.src_ip]=(sources[a.src_ip]||0)+1;cats[a.category]=(cats[a.category]||0)+1;}$('sources').innerHTML=Object.entries(sources).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([ip,n])=>`<div class="ip-row"><strong>${esc(ip)}</strong><span class="muted">${n} alert${n===1?'':'s'}</span></div>`).join('')||'<div class="empty">No recent sources</div>';$('categories').innerHTML=Object.entries(cats).map(([k,v])=>`<span class="badge">${esc(k)} · ${v}</span>`).join('')||'<span class="muted">No detections recorded</span>';renderThreat();}
 function renderThreat(){const recent=alerts.filter(a=>Date.now()-Date.parse(a.timestamp)<300000),high=recent.filter(a=>a.severity==='high').length;const level=high>=10?'CRITICAL':high?'HIGH':recent.length?'ELEVATED':'NORMAL';$('threat').textContent=connected?level:'UNKNOWN';$('threat').className=level.toLowerCase();}
 function renderAlert(a){if(a.id && alerts.some(x=>x.id===a.id))return;alerts.unshift(a);alerts=alerts.slice(0,100);if(!a.id || a.id>(totals.last_alert_id||0)){totals.total_alerts++;if(a.severity==='high')totals.high_severity++;if(a.id)totals.last_alert_id=a.id;}renderAlerts();}
 function renderList(items,kind){const isBlock=kind==='blocks';$(isBlock?'block-count':'white-count').textContent=items.length;$(isBlock?'blocked':'white-total').textContent=items.length;$(kind).replaceChildren();if(!items.length){$(kind).innerHTML='<div class="empty">No entries</div>';return;}for(const item of items){const ip=isBlock?item.src_ip:item.ip,row=document.createElement('div');row.className='ip-row';row.innerHTML=`<div><strong>${esc(ip)}</strong><small>${esc(isBlock?item.reason:item.note||'Trusted host')}${isBlock?' · Blocked at '+time(item.blocked_at):''}</small></div>`;const b=document.createElement('button');b.textContent=isBlock?'Remove block':'Remove';b.onclick=async()=>{try{await api('/api/'+kind+'/'+encodeURIComponent(ip),{method:'DELETE'});await refreshLists();}catch(e){toast(e.message);}};row.append(b);$(kind).append(row);}}
@@ -470,6 +508,11 @@ async function refreshLists(){const [b,w]=await Promise.all([api('/api/blocks'),
 async function hydrate(){loading=true;queued=[];try{const [a,s]=await Promise.all([api('/api/alerts'),api('/api/status'),refreshLists()]);alerts=a;totals={total_alerts:s.total_alerts,high_severity:s.high_severity,last_alert_id:s.last_alert_id};renderPacketStats(s,false);renderAlerts();}finally{loading=false;if(queued.length){/* Persisted IDs deduplicate events overlapping the REST snapshot. */const pending=queued;queued=[];pending.forEach(renderAlert);}}}
 for(const [id,kind] of [['block-form','blocks'],['white-form','whitelist']])$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,body=Object.fromEntries(new FormData(form));try{await api('/api/'+kind,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});form.reset();await refreshLists();toast('Saved');}catch(err){toast(err.message);}};
 let retry=1000;
-function connectWS(){const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);ws.onopen=async()=>{connected=true;retry=1000;$('connection').textContent='● CONNECTED';try{await hydrate();}catch(e){toast(e.message);}};ws.onmessage=async e=>{try{const m=JSON.parse(e.data);if(m.type==='packet_stats')renderPacketStats(m.data);else if(m.type==='alert'){if(loading)queued.push(m.data);else renderAlert(m.data);await refreshLists();}else if(m.type==='block_added'||m.type==='block_removed')await refreshLists();}catch(err){toast(err.message);}};ws.onerror=()=>ws.close();ws.onclose=()=>{connected=false;$('connection').textContent='● DISCONNECTED · Reconnecting…';$('capture-state').textContent='CAPTURE STATUS UNKNOWN';$('traffic-empty').textContent='Telemetry disconnected · Attempting to reconnect…';renderThreat();setTimeout(connectWS,retry);retry=Math.min(retry*2,10000);};}
+function connectWS(){const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws?token=${encodeURIComponent(token)}`);ws.onopen=async()=>{connected=true;retry=1000;$('connection').textContent='● CONNECTED';try{await hydrate();}catch(e){toast(e.message);}};ws.onmessage=async e=>{try{const m=JSON.parse(e.data);if(m.type==='packet_stats')renderPacketStats(m.data);else if(m.type==='alert'){if(loading)queued.push(m.data);else renderAlert(m.data);await refreshLists();}else if(m.type==='block_added'||m.type==='block_removed')await refreshLists();}catch(err){toast(err.message);}};ws.onerror=()=>ws.close();ws.onclose=()=>{connected=false;if(authNeeded){$('connection').textContent='● TOKEN REQUIRED';return;}$('connection').textContent='● DISCONNECTED · Reconnecting…';$('capture-state').textContent='CAPTURE STATUS UNKNOWN';$('traffic-empty').textContent='Telemetry disconnected · Attempting to reconnect…';renderThreat();setTimeout(connectWS,retry);retry=Math.min(retry*2,10000);};}
+/* Missing or rejected token: explain how to get in (instead of an endless DISCONNECTED) and accept a pasted link or token. */
+let authNeeded=false;
+function showAuth(rejected){authNeeded=true;$('auth').hidden=false;$('auth-reason').textContent=rejected?'The access token in this tab was rejected. SentinelEdge has probably restarted, which creates a new token.':'This dashboard is protected and this tab has no access token.';$('connection').textContent='● TOKEN REQUIRED';}
+$('auth-form').onsubmit=e=>{e.preventDefault();const v=String(new FormData(e.currentTarget).get('token')||'').trim(),m=/token=([^&\s]+)/.exec(v),t=m?decodeURIComponent(m[1]):v;if(!t)return;location.hash='token='+encodeURIComponent(t);location.reload();};
 window.addEventListener('resize',drawCharts);setInterval(renderThreat,10000);connectWS();
+if(!token)showAuth(false);else api('/api/status').catch(e=>e.auth?showAuth(true):toast(e.message));
 </script></body></html>

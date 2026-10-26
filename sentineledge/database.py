@@ -1,12 +1,15 @@
 """
 database.py — SQLite storage for alerts, blocks, and whitelist.
 """
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-DB_PATH = "sentineledge.db"
+# Project folder by default, so it doesn't depend on where the app was started
+DB_PATH = os.environ.get("SENTINELEDGE_DB") or str(Path(__file__).resolve().parent.parent / "sentineledge.db")
 _lock = threading.Lock()
 
 
@@ -32,7 +35,8 @@ def init_db():
             src_ip    TEXT    NOT NULL,
             detail    TEXT,
             severity  TEXT    NOT NULL,
-            action    TEXT    NOT NULL
+            action    TEXT    NOT NULL,
+            mitre     TEXT    NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS blocks (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,17 +51,32 @@ def init_db():
             note   TEXT
         );
         """)
+        # Upgrade databases created before alerts carried a MITRE ATT&CK label
+        if "mitre" not in {row["name"] for row in c.execute("PRAGMA table_info(alerts)")}:
+            c.execute("ALTER TABLE alerts ADD COLUMN mitre TEXT NOT NULL DEFAULT ''")
 
 
 # ── Alerts ──────────────────────────────────────────────────────────────────
 
-def insert_alert(alert_id, category, src_ip, detail, severity, action):
+def insert_alert(alert_id, category, src_ip, detail, severity, action, mitre="") -> dict:
+    """Store an alert and return the stored row (with its id and timestamp)."""
     with _lock, _conn() as c:
-        c.execute(
-            "INSERT INTO alerts (timestamp,alert_id,category,src_ip,detail,severity,action) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (datetime.now(timezone.utc).isoformat(), alert_id, category, src_ip, detail, severity, action),
+        cur = c.execute(
+            "INSERT INTO alerts (timestamp,alert_id,category,src_ip,detail,severity,action,mitre) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), alert_id, category, src_ip, detail, severity, action,
+             mitre or ""),
         )
+        return dict(c.execute("SELECT * FROM alerts WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+def prune_alerts(retention_days: float) -> int:
+    """Delete alerts older than retention_days (0 or None keeps everything); returns the count."""
+    if not retention_days:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    with _lock, _conn() as c:
+        return c.execute("DELETE FROM alerts WHERE timestamp < ?", (cutoff,)).rowcount
 
 
 def get_alerts(limit=100):
@@ -74,12 +93,22 @@ def get_alert_summary():
 
 
 # ── Blocks ───────────────────────────────────────────────────────────────────
+# expires_at is an ISO-8601 UTC timestamp (NULL = until removed); expired rows are
+# ignored everywhere and purged on the next write.
+
+_ACTIVE = "(expires_at IS NULL OR expires_at > ?)"
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
 
 def add_block(src_ip, reason, expires_at=None):
     with _lock, _conn() as c:
+        c.execute(f"DELETE FROM blocks WHERE NOT {_ACTIVE}", (_now_iso(),))
         c.execute(
             "INSERT OR REPLACE INTO blocks (src_ip,reason,blocked_at,expires_at) VALUES (?,?,?,?)",
-            (src_ip, reason, datetime.now(timezone.utc).isoformat(), expires_at),
+            (src_ip, reason, _now_iso(), expires_at),
         )
 
 
@@ -90,13 +119,13 @@ def remove_block(src_ip):
 
 def get_blocks():
     with _conn() as c:
-        rows = c.execute("SELECT * FROM blocks ORDER BY id DESC").fetchall()
+        rows = c.execute(f"SELECT * FROM blocks WHERE {_ACTIVE} ORDER BY id DESC", (_now_iso(),)).fetchall()
     return [dict(r) for r in rows]
 
 
 def is_blocked(src_ip):
     with _conn() as c:
-        row = c.execute("SELECT 1 FROM blocks WHERE src_ip=?", (src_ip,)).fetchone()
+        row = c.execute(f"SELECT 1 FROM blocks WHERE src_ip=? AND {_ACTIVE}", (src_ip, _now_iso())).fetchone()
     return row is not None
 
 

@@ -11,32 +11,54 @@ Endpoints:
   POST /api/whitelist   → add to whitelist   {ip, note}
   DELETE /api/whitelist/{ip} → remove from whitelist
   WS   /ws             → real-time alert push
+
+All /api/* routes need 'Authorization: Bearer <token>'; /ws needs ?token=<token>.
 """
 import asyncio
 import json
+import secrets
 from pathlib import Path
 from ipaddress import IPv4Address
 from typing import List
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from .database import (
     get_alerts, get_blocks, add_block, remove_block,
-    get_whitelist, add_whitelist, remove_whitelist, is_whitelisted, get_alert_summary
+    get_whitelist, add_whitelist, remove_whitelist, is_whitelisted, get_alert_summary, is_blocked
 )
+from .decision import firewall_block, firewall_unblock
 
 from contextlib import asynccontextmanager
 
 _loop: asyncio.AbstractEventLoop | None = None
 _capture = None
 _dry_run = True
+_token = secrets.token_urlsafe(24)   # replaced by run.py; never empty
+
+_protected = {"127.0.0.1"}            # never blockable from the dashboard
 
 def configure_capture(capture, dry_run: bool = True):
     global _capture, _dry_run
     _capture, _dry_run = capture, dry_run
+
+def configure_protected(ips):
+    """Addresses the manual block API always refuses (localhost plus the configured whitelist)."""
+    global _protected
+    _protected = {"127.0.0.1", *ips}
+
+def configure_auth(token: str):
+    """Set the access token required by /api/* and /ws."""
+    global _token
+    if not token:
+        raise ValueError("access token must not be empty")
+    _token = token
+
+def token_ok(candidate: str | None) -> bool:
+    return bool(candidate) and secrets.compare_digest(candidate.encode(), _token.encode())
 
 def capture_status() -> dict:
     return {**(_capture.snapshot() if _capture else {"status": "starting", "mode": "unknown", "uptime_seconds": 0}),
@@ -66,6 +88,16 @@ async def lifespan(fastapi_app: FastAPI):
 
 app = FastAPI(title="SentinelEdge Dashboard", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    """Every /api/* request needs 'Authorization: Bearer <token>'; the page itself holds no data."""
+    if request.url.path.startswith("/api"):
+        scheme, _, candidate = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() != "bearer" or not token_ok(candidate):
+            return JSONResponse({"detail": "Missing or invalid access token"}, status_code=401)
+    return await call_next(request)
 
 # ── WebSocket connection manager ──────────────────────────────────────────────
 
@@ -141,17 +173,27 @@ class BlockRequest(BaseModel):
 @app.post("/api/blocks")
 async def api_add_block(body: BlockRequest):
     validate_ip(body.ip)
-    if body.ip in ("127.0.0.1", "192.168.56.1") or is_whitelisted(body.ip):
+    if body.ip in _protected or is_whitelisted(body.ip):
         raise HTTPException(409, "Protected or whitelisted address")
+    # Manual blocks are enforced in live mode and last until removed
+    if not _dry_run and not firewall_block(body.ip):
+        raise HTTPException(502, "Firewall update failed; see the server log")
     add_block(body.ip, body.reason)
     await manager.broadcast({"type": "block_added", "ip": body.ip})
     return {"status": "ok"}
 
 
-@app.delete("/api/blocks/{ip}")
-async def api_remove_block(ip: str):
+async def _unblock(ip: str):
+    if not _dry_run:
+        firewall_unblock(ip)
     remove_block(ip)
     await manager.broadcast({"type": "block_removed", "ip": ip})
+
+
+@app.delete("/api/blocks/{ip}")
+async def api_remove_block(ip: str):
+    validate_ip(ip)
+    await _unblock(ip)
     return {"status": "ok"}
 
 
@@ -169,6 +211,8 @@ class WhitelistRequest(BaseModel):
 async def api_add_whitelist(body: WhitelistRequest):
     validate_ip(body.ip)
     add_whitelist(body.ip, body.note)
+    if is_blocked(body.ip):            # trusting an address also lifts its block
+        await _unblock(body.ip)
     return {"status": "ok"}
 
 
@@ -180,6 +224,10 @@ async def api_remove_whitelist(ip: str):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    # Browsers can't set headers on WebSockets, so the token travels as ?token=
+    if not token_ok(ws.query_params.get("token")):
+        await ws.close(code=1008)   # policy violation; rejects the handshake
+        return
     await manager.connect(ws)
     try:
         await ws.send_json({"type": "packet_stats", "data": capture_status()})

@@ -5,6 +5,13 @@ capture:
   pcap_file: null            # set to a .pcap path for offline replay, e.g. "sample.pcap"
   dry_run: true              # true = log only; false = apply nftables rules
 
+alerts:
+  suppress_sec: 60           # drop repeats of the same rule + IP + action within this window; 0 = off
+  retention_days: 30         # alerts older than this are deleted at startup; 0 = keep forever
+
+response:
+  block_expiry_sec: 600      # automatic blocks/rate-limits lift after this; manual blocks last until removed
+
 whitelist:
   - "127.0.0.1"
   - "192.168.56.1"           # VirtualBox host IP — never block this
@@ -12,6 +19,7 @@ whitelist:
 rules:
   - id: PORTSCAN-001
     category: recon
+    mitre: T1046                # ATT&CK: Network Service Discovery
     algorithm: trw
     params:
       alpha: 0.01
@@ -24,6 +32,7 @@ rules:
 
   - id: SYNFLOOD-001
     category: dos
+    mitre: T1498.001            # ATT&CK: Network Denial of Service: Direct Network Flood
     algorithm: ewma_threshold
     params:
       lambda: 0.2
@@ -35,6 +44,7 @@ rules:
 
   - id: BRUTEFORCE-001
     category: auth
+    mitre: T1110                # ATT&CK: Brute Force
     algorithm: brute_force
     params:
       fail_threshold_alert: 6
@@ -47,11 +57,13 @@ rules:
 
   - id: EXFIL-001
     category: exfil
+    mitre: TA0010               # ATT&CK: Exfiltration (tactic)
     algorithm: exfil_volume
     params:
-      multiplier: 5
-      window_sec: 300
-      absolute_floor_bytes: 524288000   # 500 MB
+      multiplier: 5                     # spike = this many times the host's own 24 h average
+      window_sec: 300                   # measured in whole minutes
+      absolute_floor_bytes: 524288000   # 500 MB; never alert below this
+      # internal_networks: ["192.168.56.0/24"]   # default: every private address range
     severity: medium
     action: alert_only
     enabled: true
@@ -60,12 +72,16 @@ signatures:
   - id: SIG-001
     pattern: "/etc/passwd"
     severity: high
+    mitre: T1190                # ATT&CK: Exploit Public-Facing Application
   - id: SIG-002
     pattern: "cmd.exe"
     severity: high
+    mitre: T1059.003            # ATT&CK: Windows Command Shell
   - id: SIG-003
     pattern: "SELECT * FROM"
     severity: medium
+    mitre: T1190                # ATT&CK: Exploit Public-Facing Application
   - id: SIG-004
     pattern: "nmap"
     severity: low
+    mitre: T1046                # ATT&CK: Network Service Discovery
