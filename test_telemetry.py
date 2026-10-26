@@ -348,6 +348,14 @@ class TelemetryTests(unittest.TestCase):
         config['signatures'][0]['enabled'] = False                     # SIG-001
         self.assertEqual(self.sample_alert_ids(config), ['SIG-002'])
 
+    # ── Evaluation scenarios (evaluate.py) ──
+    def test_evaluation_scenarios_all_pass(self):
+        """Guard against regressions: every labelled scenario is detected with no false alarms."""
+        import evaluate
+        results = evaluate.run_scenarios()
+        self.assertEqual(len(results), 15)
+        self.assertEqual([(r['name'], r['missing'], r['false_alarms']) for r in results if not r['passed']], [])
+
     # ── MITRE ATT&CK labels ──
     def test_alerts_carry_mitre_attack_labels(self):
         labels = {a.alert_id: a.mitre for a in self.sample_alerts(self.project_config())}
