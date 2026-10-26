@@ -5,7 +5,8 @@ Usage:
   python run.py [--iface eth0] [--pcap sample.pcap] [--dry-run] [--host 127.0.0.1] [--port 8000]
 
 The dashboard needs an access token: set SENTINELEDGE_TOKEN, or a random one is
-generated and printed as part of the dashboard link at startup.
+generated and printed as part of the dashboard link at startup. On a desktop
+session that link is also opened in the browser (disable with --no-browser).
 
 Starts:
   1. SQLite DB init
@@ -16,6 +17,9 @@ import argparse
 import logging
 import os
 import secrets
+import sys
+import threading
+import webbrowser
 import uvicorn
 import yaml
 
@@ -36,7 +40,15 @@ def parse_args():
                    help="Dashboard bind address (default 127.0.0.1 = this machine only; 0.0.0.0 = whole network)")
     p.add_argument("--port",    type=int, default=8000, help="Dashboard port (default 8000)")
     p.add_argument("--config",  default="config.yaml", help="Config file path")
+    p.add_argument("--no-browser", action="store_true", help="Don't open the dashboard in a browser")
     return p.parse_args()
+
+
+def can_open_browser() -> bool:
+    """Only on an interactive desktop session: never as root or on a server without a display."""
+    if sys.platform.startswith("linux"):
+        return os.geteuid() != 0 and bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True
 
 
 def load_config(path: str) -> dict:
@@ -113,6 +125,8 @@ def main():
     configure_auth(token)
     exposed = args.host not in ("127.0.0.1", "localhost", "::1")
     link_host = "127.0.0.1" if args.host in ("0.0.0.0", "::", "") else args.host
+    link = f"http://{link_host}:{args.port}/#token={token}"
+    browser = not args.no_browser and can_open_browser()
 
     dry = _config.get("capture", {}).get("dry_run", True)
     pcap = _config.get("capture", {}).get("pcap_file")
@@ -123,9 +137,14 @@ def main():
 |  Mode   : {'DRY-RUN (log only)' if dry else 'LIVE (nftables active)'}
 |  Source  : {'PCAP: ' + pcap if pcap else 'Live: ' + _config.get('capture',{}).get('interface','eth0')}
 |  Listening: {args.host}:{args.port}{'  (WARNING: reachable from the network)' if exposed else '  (this machine only)'}
-|  Dashboard: http://{link_host}:{args.port}/#token={token}
+|  Dashboard: {link}
+|      Open this exact link{' (opening it in your browser now)' if browser else ''}.
+|      It contains the access token; plain http://{link_host}:{args.port} will ask for it.
 +----------------------------------------------+
 """, flush=True)   # the link carries the token: show it even when output goes to a log file
+
+    if browser:   # give the server a moment to start listening first
+        threading.Timer(1.5, webbrowser.open, [link]).start()
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 

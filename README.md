@@ -27,9 +27,12 @@ python -m pip install -r requirements-test.txt
 python run.py --pcap sample.pcap
 ```
 
-Open the **Dashboard:** link printed at startup, for example
-`http://127.0.0.1:8000/#token=...`. `sample.pcap` contains one of each attack, so you
-should see 5 alerts (port scan, SYN flood, brute force, two signatures).
+Your browser opens the dashboard automatically. If it doesn't (or you closed it), open
+the **Dashboard:** link printed in the terminal, for example
+`http://127.0.0.1:8000/#token=...`. Use that exact link: plain `http://localhost:8000`
+shows an "Access token needed" panel, where you can paste the link instead.
+`sample.pcap` contains one of each attack, so you should see 5 alerts (port scan,
+SYN flood, brute force, two signatures).
 
 ## Live capture and blocking (Linux only)
 
@@ -48,7 +51,10 @@ live mode refuses to start rather than running unprotected.
 - It listens on **127.0.0.1 only** by default. `--host 0.0.0.0` exposes it to the
   network on purpose (there is no HTTPS, so do this only on a trusted lab network).
 - Every API call needs an access token. A new random one is generated each run and
-  included in the printed link; set `SENTINELEDGE_TOKEN` to keep the same one.
+  included in the printed link (old links stop working after a restart); set
+  `SENTINELEDGE_TOKEN` to keep the same one.
+- On a desktop session the link opens in your browser by default. `--no-browser` turns
+  that off; it never happens when running as root or without a display.
 - From the dashboard you can block or unblock IPs and manage the whitelist.
 
 ## Configuration (`config.yaml`)

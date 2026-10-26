@@ -20,8 +20,10 @@ Offline replay:
 
     python run.py --pcap sample.pcap
 
-Open the "Dashboard:" link printed at startup, e.g.
-http://127.0.0.1:8000/#token=... (the port follows --port). The dashboard API and
+The "Dashboard:" link printed at startup, e.g. http://127.0.0.1:8000/#token=...
+(the port follows --port), opens in the browser automatically on a desktop session
+(not as root or without a display; --no-browser disables it). Without a valid token
+the page shows an "Access token needed" panel that accepts the pasted link. The dashboard API and
 WebSocket require that access token; a new random one is generated each run unless
 SENTINELEDGE_TOKEN is set. The server listens on 127.0.0.1 (this machine only) by
 default; pass --host 0.0.0.0 to expose it to the network deliberately.

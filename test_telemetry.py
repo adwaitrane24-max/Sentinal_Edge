@@ -471,6 +471,8 @@ class TelemetryTests(unittest.TestCase):
              patch('logging.basicConfig'), \
              patch.dict('os.environ', {'SENTINELEDGE_TOKEN': 'env-token'}), \
              patch.object(CaptureEngine, 'start', CaptureEngine._run), \
+             patch.object(run, 'can_open_browser', return_value=True), \
+             patch('run.threading.Timer') as timer, \
              patch.object(run.uvicorn, 'run') as server:
             run.main()
         self.assertEqual(dashboard.capture_status()['total_packets'], len(rdpcap('sample.pcap')))
@@ -479,17 +481,32 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(server.call_args.kwargs['port'], 8123)
         self.assertEqual(server.call_args.kwargs['host'], '127.0.0.1')   # private by default
         self.assertTrue(dashboard.token_ok('env-token'))
+        # The browser is opened on the exact link, token included, so nobody has to type it
+        _delay, opener, [link] = timer.call_args.args
+        self.assertEqual((opener, link), (run.webbrowser.open, 'http://127.0.0.1:8123/#token=env-token'))
 
     def test_entry_point_host_override_and_generated_token(self):
         import run
-        with patch('sys.argv', ['run.py', '--pcap', 'sample.pcap', '--host', '0.0.0.0']), \
+        with patch('sys.argv', ['run.py', '--pcap', 'sample.pcap', '--host', '0.0.0.0', '--no-browser']), \
              patch('logging.basicConfig'), \
              patch.dict('os.environ', {}, clear=True), \
              patch.object(CaptureEngine, 'start', lambda self: None), \
+             patch.object(run, 'can_open_browser', return_value=True), \
+             patch('run.threading.Timer') as timer, \
              patch.object(run.uvicorn, 'run') as server:
             run.main()
         self.assertEqual(server.call_args.kwargs['host'], '0.0.0.0')
         self.assertFalse(dashboard.token_ok('test-token'))   # a fresh random token replaced it
+        timer.assert_not_called()                             # --no-browser
+
+    def test_browser_never_opened_as_root_or_without_display(self):
+        import run
+        with patch.object(run.sys, 'platform', 'linux'):
+            for euid, env, expected in [(0, {'DISPLAY': ':0'}, False), (1000, {}, False),
+                                        (1000, {'DISPLAY': ':0'}, True), (1000, {'WAYLAND_DISPLAY': 'w'}, True)]:
+                with patch.object(run.os, 'geteuid', return_value=euid, create=True), \
+                     patch.dict('os.environ', env, clear=True):
+                    self.assertEqual(run.can_open_browser(), expected, (euid, env))
 
 
 if __name__ == '__main__':
