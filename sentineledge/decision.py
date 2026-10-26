@@ -130,6 +130,7 @@ def handle_alert(alert: Alert, dry_run: bool = True) -> dict:
         detail=alert.detail,
         severity=alert.severity,
         action=alert.action,
+        mitre=alert.mitre,
     )
 
     log.warning("[ALERT] %s | %s | %s | %s", alert.alert_id, alert.severity.upper(), src_ip, alert.detail)

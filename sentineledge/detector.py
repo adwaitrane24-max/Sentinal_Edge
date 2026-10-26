@@ -42,6 +42,17 @@ class Alert:
     detail: str
     severity: str
     action: str
+    mitre: str = ""        # MITRE ATT&CK technique or tactic id, e.g. "T1046"
+
+
+# Default MITRE ATT&CK labels (https://attack.mitre.org); a rule's or signature's
+# `mitre:` key in config.yaml overrides them.
+MITRE_DEFAULTS = {
+    "PORTSCAN-001": "T1046",       # Network Service Discovery
+    "SYNFLOOD-001": "T1498.001",   # Network Denial of Service: Direct Network Flood
+    "BRUTEFORCE-001": "T1110",     # Brute Force
+    "EXFIL-001": "TA0010",         # Exfiltration (tactic: volume alone can't tell the channel)
+}
 
 
 # ── 1. Aho-Corasick signature matcher ─────────────────────────────────────────
@@ -394,6 +405,14 @@ class Detector:
                 setattr(self, attr, None)
 
         self._rules = rules
+        # alert_id -> ATT&CK label, from config with built-in defaults
+        self._mitre = {**MITRE_DEFAULTS,
+                       **{r["id"]: r["mitre"] for r in rule_list if r.get("mitre")},
+                       **{self._sig_alert_id(s["id"]): s["mitre"] for s in sigs if s.get("mitre")}}
+
+    @staticmethod
+    def _sig_alert_id(sig_id: str) -> str:
+        return sig_id if sig_id.startswith("SIG-") else f"SIG-{sig_id}"   # not "SIG-SIG-001"
 
     def process(self, flow: FlowRecord):
         self._now = flow.timestamp or time.time()
@@ -403,7 +422,7 @@ class Detector:
         if match:
             sig_id, severity = match
             self._emit(Alert(
-                alert_id=f"SIG-{sig_id}",
+                alert_id=self._sig_alert_id(sig_id),
                 category="signature",
                 src_ip=flow.src_ip,
                 detail=f"Signature hit: {sig_id}",
@@ -465,6 +484,7 @@ class Detector:
 
     def _emit(self, alert: Alert):
         """Forward an alert unless the same rule fired for the same source and action recently."""
+        alert.mitre = alert.mitre or self._mitre.get(alert.alert_id, "")
         now = self._now or time.time()
         key = (alert.alert_id, alert.src_ip, alert.action)
         last = self._last_alert.get(key)

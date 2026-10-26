@@ -325,22 +325,54 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(pushed, next(a for a in database.get_alerts() if a['id'] == pushed['id']))
 
     # ── Rule switches (fix #8) ──
-    def sample_alert_ids(self, config):
+    def sample_alerts(self, config):
         alerts = []
         d = Detector(config, alerts.append)
         CaptureEngine({'capture': {'pcap_file': 'sample.pcap'}}, d.process, d.flush)._run()
-        return sorted({a.alert_id for a in alerts})
+        return alerts
 
-    def test_disabled_rules_do_not_run(self):
+    def sample_alert_ids(self, config):
+        return sorted({a.alert_id for a in self.sample_alerts(config)})
+
+    def project_config(self):
         import yaml
         with open('config.yaml', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+            return yaml.safe_load(f)
+
+    def test_disabled_rules_do_not_run(self):
+        config = self.project_config()
         self.assertEqual(self.sample_alert_ids(config),
-                         ['BRUTEFORCE-001', 'PORTSCAN-001', 'SIG-SIG-001', 'SIG-SIG-002', 'SYNFLOOD-001'])
+                         ['BRUTEFORCE-001', 'PORTSCAN-001', 'SIG-001', 'SIG-002', 'SYNFLOOD-001'])
         for rule in config['rules']:
             rule['enabled'] = False
         config['signatures'][0]['enabled'] = False                     # SIG-001
-        self.assertEqual(self.sample_alert_ids(config), ['SIG-SIG-002'])
+        self.assertEqual(self.sample_alert_ids(config), ['SIG-002'])
+
+    # ── MITRE ATT&CK labels ──
+    def test_alerts_carry_mitre_attack_labels(self):
+        labels = {a.alert_id: a.mitre for a in self.sample_alerts(self.project_config())}
+        self.assertEqual(labels, {'PORTSCAN-001': 'T1046', 'SYNFLOOD-001': 'T1498.001',
+                                  'BRUTEFORCE-001': 'T1110', 'SIG-001': 'T1190', 'SIG-002': 'T1059.003'})
+        # Built-in defaults apply without config; config overrides them
+        self.assertEqual({a.mitre for a in self.sample_alerts({}) if a.alert_id == 'PORTSCAN-001'}, {'T1046'})
+        custom = {'rules': [{'id': 'PORTSCAN-001', 'mitre': 'T1595'}]}
+        self.assertEqual({a.mitre for a in self.sample_alerts(custom) if a.alert_id == 'PORTSCAN-001'}, {'T1595'})
+
+    def test_mitre_label_is_stored_and_old_databases_are_upgraded(self):
+        import sqlite3
+        old_db = str(Path(self.temp.name) / 'old.db')
+        with sqlite3.connect(old_db) as c:   # schema from before the label existed, with one alert
+            c.execute('CREATE TABLE alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, '
+                      'alert_id TEXT NOT NULL, category TEXT NOT NULL, src_ip TEXT NOT NULL, detail TEXT, '
+                      'severity TEXT NOT NULL, action TEXT NOT NULL)')
+            c.execute("INSERT INTO alerts VALUES (1,'2026-01-01T00:00:00+00:00','OLD','x','10.0.0.1','d','low','alert_only')")
+        c.close()
+        with patch.object(database, 'DB_PATH', old_db):
+            database.init_db()
+            database.init_db()                                     # upgrading twice is harmless
+            row = handle_alert(Alert('PORTSCAN-001', 'recon', '10.0.0.66', 'd', 'medium', 'alert_only', 'T1046'))
+            self.assertEqual(row['mitre'], 'T1046')
+            self.assertEqual([a['mitre'] for a in database.get_alerts()], ['T1046', ''])   # old row kept
 
     # ── Firewall response (fix #6); nft is replaced by a recorder ──
     def nft_calls(self, run):

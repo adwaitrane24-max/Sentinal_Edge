@@ -35,7 +35,8 @@ def init_db():
             src_ip    TEXT    NOT NULL,
             detail    TEXT,
             severity  TEXT    NOT NULL,
-            action    TEXT    NOT NULL
+            action    TEXT    NOT NULL,
+            mitre     TEXT    NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS blocks (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,17 +51,21 @@ def init_db():
             note   TEXT
         );
         """)
+        # Upgrade databases created before alerts carried a MITRE ATT&CK label
+        if "mitre" not in {row["name"] for row in c.execute("PRAGMA table_info(alerts)")}:
+            c.execute("ALTER TABLE alerts ADD COLUMN mitre TEXT NOT NULL DEFAULT ''")
 
 
 # ── Alerts ──────────────────────────────────────────────────────────────────
 
-def insert_alert(alert_id, category, src_ip, detail, severity, action) -> dict:
+def insert_alert(alert_id, category, src_ip, detail, severity, action, mitre="") -> dict:
     """Store an alert and return the stored row (with its id and timestamp)."""
     with _lock, _conn() as c:
         cur = c.execute(
-            "INSERT INTO alerts (timestamp,alert_id,category,src_ip,detail,severity,action) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (datetime.now(timezone.utc).isoformat(), alert_id, category, src_ip, detail, severity, action),
+            "INSERT INTO alerts (timestamp,alert_id,category,src_ip,detail,severity,action,mitre) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), alert_id, category, src_ip, detail, severity, action,
+             mitre or ""),
         )
         return dict(c.execute("SELECT * FROM alerts WHERE id=?", (cur.lastrowid,)).fetchone())
 

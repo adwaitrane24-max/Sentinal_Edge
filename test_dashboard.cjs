@@ -27,6 +27,14 @@ assert.equal(el('alerts').textContent,'1');
 assert.equal(el('high').textContent,'1');
 assert.equal(el('uptime').textContent,'00:14:03');
 assert.ok(el('feed').innerHTML.includes('&lt;script&gt;'));
+// MITRE ATT&CK column: technique, sub-technique and tactic ids link to attack.mitre.org; anything else is plain text
+vm.runInContext("renderAlert({id:2,timestamp:new Date().toISOString(),alert_id:'SYNFLOOD-001',mitre:'T1498.001',src_ip:'10.0.0.2',severity:'high',action:'block',category:'dos',detail:'x'});" +
+  "renderAlert({id:3,timestamp:new Date().toISOString(),alert_id:'EXFIL-001',mitre:'TA0010',src_ip:'10.0.0.3',severity:'medium',action:'alert_only',category:'exfil',detail:'x'});" +
+  "renderAlert({id:4,timestamp:new Date().toISOString(),alert_id:'BAD',mitre:'\"><img src=x onerror=alert(1)>',src_ip:'10.0.0.4',severity:'low',action:'alert_only',category:'x',detail:'x'});",ctx);
+assert.ok(el('feed').innerHTML.includes('href="https://attack.mitre.org/techniques/T1498/001/"'));
+assert.ok(el('feed').innerHTML.includes('href="https://attack.mitre.org/tactics/TA0010/"'));
+assert.ok(!el('feed').innerHTML.includes('<img') && el('feed').innerHTML.includes('&lt;img'));
+vm.runInContext("alerts=alerts.filter(a=>a.id===1);totals.total_alerts=1;totals.high_severity=1;totals.last_alert_id=1;renderAlerts();",ctx);
 vm.runInContext("renderAlert(alerts[0]);",ctx);
 assert.equal(el('alerts').textContent,'1');
 for(let i=0;i<120;i++) vm.runInContext('renderPacketStats(latest)',ctx);
