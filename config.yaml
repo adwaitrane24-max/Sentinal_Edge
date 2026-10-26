@@ -8,6 +8,9 @@ capture:
 alerts:
   suppress_sec: 60           # drop repeats of the same rule + IP + action within this window; 0 = off
 
+response:
+  block_expiry_sec: 600      # automatic blocks/rate-limits lift after this; manual blocks last until removed
+
 whitelist:
   - "127.0.0.1"
   - "192.168.56.1"           # VirtualBox host IP — never block this

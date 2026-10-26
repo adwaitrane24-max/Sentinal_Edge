@@ -18,10 +18,10 @@ import secrets
 import uvicorn
 import yaml
 
-from sentineledge.database import init_db, add_whitelist, get_alerts
+from sentineledge.database import init_db, add_whitelist, get_alerts, get_blocks
 from sentineledge.detector import Detector, FlowRecord, Alert
 from sentineledge.capture import CaptureEngine
-from sentineledge.decision import handle_alert
+from sentineledge.decision import handle_alert, configure_response, setup_firewall
 from sentineledge.dashboard import app, push_alert_from_thread, configure_capture, configure_auth
 
 
@@ -82,6 +82,14 @@ def main():
     # Seed whitelist from config
     for ip in _config.get("whitelist", []):
         add_whitelist(ip, note="config")
+
+    # Live mode: (re)create the firewall table and restore unexpired blocks
+    configure_response((_config.get("response") or {}).get("block_expiry_sec"))
+    if not _config.get("capture", {}).get("dry_run", True):
+        try:
+            setup_firewall(get_blocks())
+        except RuntimeError as exc:
+            raise SystemExit(f"Live mode needs nftables: {exc}. Use --dry-run to run without it.")
 
     # Build detector
     detector = Detector(_config, alert_callback)

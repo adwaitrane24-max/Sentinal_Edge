@@ -7,8 +7,8 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from scapy.all import IP, TCP, UDP, ARP, Raw, wrpcap, rdpcap
 from sentineledge.capture import CaptureEngine
-from sentineledge.detector import Detector
-from sentineledge import database, dashboard
+from sentineledge.detector import Detector, Alert
+from sentineledge import database, dashboard, decision
 from sentineledge.decision import handle_alert, _cooldown
 
 
@@ -241,6 +241,81 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(self.synflood_alerts(), [])
         self.syns(['10.0.0.66'] * 60, start=1010.0, spacing=0.01)
         self.assertEqual(self.synflood_alerts(), [('10.0.0.66', 'block')])   # 60 < 150 ceiling
+
+    # ── Firewall response (fix #6); nft is replaced by a recorder ──
+    def nft_calls(self, run):
+        return [c.args[0][1:] if c.args[0][1] != '-f' else ['-f', c.kwargs['input']] for c in run.call_args_list]
+
+    def alert(self, ip='10.0.0.66', action='block'):
+        return Alert(alert_id='TEST-001', category='test', src_ip=ip, detail='t', severity='high', action=action)
+
+    def test_automatic_blocks_expire(self):
+        handle_alert(self.alert(), dry_run=True)
+        [block] = database.get_blocks()
+        self.assertIsNotNone(block['expires_at'])             # was always NULL (never expired)
+        database.add_block('10.0.0.66', 'old', expires_at='2000-01-01T00:00:00+00:00')
+        self.assertEqual(database.get_blocks(), [])
+        self.assertFalse(database.is_blocked('10.0.0.66'))   # can be blocked again later
+
+    def test_live_block_and_rate_limit_use_expiring_set_elements(self):
+        with patch('sentineledge.decision.subprocess.run') as run:
+            handle_alert(self.alert('10.0.0.66', 'block'), dry_run=False)
+            handle_alert(self.alert('10.0.0.67', 'rate_limit'), dry_run=False)
+        self.assertEqual(self.nft_calls(run), [
+            ['add', 'element', 'inet', 'sentineledge', 'blocked', '{ 10.0.0.66 timeout 600s }'],
+            ['add', 'element', 'inet', 'sentineledge', 'ratelimited', '{ 10.0.0.67 timeout 600s }']])
+        self.assertEqual({b['src_ip'] for b in database.get_blocks()}, {'10.0.0.66', '10.0.0.67'})
+
+    def test_live_block_not_recorded_when_firewall_fails(self):
+        with patch('sentineledge.decision.subprocess.run', side_effect=FileNotFoundError('nft')):
+            handle_alert(self.alert(), dry_run=False)
+        self.assertEqual(database.get_blocks(), [])
+
+    def test_dashboard_unblock_and_whitelist_remove_firewall_entry(self):
+        dashboard.configure_capture(self.capture, dry_run=False)
+        with patch('sentineledge.decision.subprocess.run') as run, self.client() as client:
+            self.assertEqual(client.post('/api/blocks', json={'ip': '10.0.0.66'}).status_code, 200)
+            self.assertEqual(client.delete('/api/blocks/10.0.0.66').status_code, 200)
+            database.add_block('10.0.0.67', 'TEST-001')
+            self.assertEqual(client.post('/api/whitelist', json={'ip': '10.0.0.67'}).status_code, 200)
+            self.assertEqual(client.delete('/api/blocks/not-an-ip').status_code, 422)
+        self.assertEqual(self.nft_calls(run), [
+            ['add', 'element', 'inet', 'sentineledge', 'blocked', '{ 10.0.0.66 }'],     # manual: no expiry
+            ['delete', 'element', 'inet', 'sentineledge', 'blocked', '{ 10.0.0.66 }'],
+            ['delete', 'element', 'inet', 'sentineledge', 'ratelimited', '{ 10.0.0.66 }'],
+            ['delete', 'element', 'inet', 'sentineledge', 'blocked', '{ 10.0.0.67 }'],
+            ['delete', 'element', 'inet', 'sentineledge', 'ratelimited', '{ 10.0.0.67 }']])
+        self.assertEqual(database.get_blocks(), [])
+
+    def test_setup_firewall_replaces_table_and_restores_active_blocks(self):
+        future = '2999-01-01T00:00:00+00:00'
+        blocks = [{'src_ip': '10.0.0.66', 'reason': 'SYNFLOOD-001', 'expires_at': future},
+                  {'src_ip': '10.0.0.67', 'reason': 'rate-limit:PORTSCAN-001', 'expires_at': None},
+                  {'src_ip': '10.0.0.68', 'reason': 'old', 'expires_at': '2000-01-01T00:00:00+00:00'},
+                  {'src_ip': '10.0.0.69', 'reason': '[DRY-RUN] SYNFLOOD-001', 'expires_at': future},
+                  {'src_ip': '1.2.3.4 } ; flush ruleset', 'reason': 'manual', 'expires_at': None}]
+        with patch('sentineledge.decision.subprocess.run') as run:
+            decision.setup_firewall(blocks)
+        [[flag, script]] = self.nft_calls(run)
+        self.assertEqual(flag, '-f')
+        self.assertTrue(script.startswith('add table inet sentineledge\ndelete table inet sentineledge\n'))
+        self.assertRegex(script, r'add element inet sentineledge blocked \{ 10\.0\.0\.66 timeout \d+s \}')
+        self.assertIn('add element inet sentineledge ratelimited { 10.0.0.67 }', script)
+        for skipped in ('10.0.0.68', '10.0.0.69', 'flush ruleset'):   # expired, dry-run, invalid
+            self.assertNotIn(skipped, script)
+        with patch('sentineledge.decision.subprocess.run', side_effect=FileNotFoundError('nft')), \
+             self.assertRaises(RuntimeError):
+            decision.setup_firewall([])
+
+    def test_live_mode_refuses_to_start_without_nftables(self):
+        import run
+        cfg = Path(self.temp.name) / 'live.yaml'
+        cfg.write_text('capture:\n  pcap_file: sample.pcap\n  dry_run: false\n')
+        with patch('sys.argv', ['run.py', '--config', str(cfg)]), \
+             patch('sentineledge.decision.subprocess.run', side_effect=FileNotFoundError('nft')), \
+             patch.object(run.uvicorn, 'run') as server, self.assertRaises(SystemExit):
+            run.main()
+        server.assert_not_called()
 
     def test_api_rejects_missing_or_wrong_token(self):
         for token in (None, 'wrong-token'):

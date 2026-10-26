@@ -28,8 +28,9 @@ from pydantic import BaseModel
 
 from .database import (
     get_alerts, get_blocks, add_block, remove_block,
-    get_whitelist, add_whitelist, remove_whitelist, is_whitelisted, get_alert_summary
+    get_whitelist, add_whitelist, remove_whitelist, is_whitelisted, get_alert_summary, is_blocked
 )
+from .decision import firewall_block, firewall_unblock
 
 from contextlib import asynccontextmanager
 
@@ -167,15 +168,25 @@ async def api_add_block(body: BlockRequest):
     validate_ip(body.ip)
     if body.ip in ("127.0.0.1", "192.168.56.1") or is_whitelisted(body.ip):
         raise HTTPException(409, "Protected or whitelisted address")
+    # Manual blocks are enforced in live mode and last until removed
+    if not _dry_run and not firewall_block(body.ip):
+        raise HTTPException(502, "Firewall update failed; see the server log")
     add_block(body.ip, body.reason)
     await manager.broadcast({"type": "block_added", "ip": body.ip})
     return {"status": "ok"}
 
 
-@app.delete("/api/blocks/{ip}")
-async def api_remove_block(ip: str):
+async def _unblock(ip: str):
+    if not _dry_run:
+        firewall_unblock(ip)
     remove_block(ip)
     await manager.broadcast({"type": "block_removed", "ip": ip})
+
+
+@app.delete("/api/blocks/{ip}")
+async def api_remove_block(ip: str):
+    validate_ip(ip)
+    await _unblock(ip)
     return {"status": "ok"}
 
 
@@ -193,6 +204,8 @@ class WhitelistRequest(BaseModel):
 async def api_add_whitelist(body: WhitelistRequest):
     validate_ip(body.ip)
     add_whitelist(body.ip, body.note)
+    if is_blocked(body.ip):            # trusting an address also lifts its block
+        await _unblock(body.ip)
     return {"status": "ok"}
 
 

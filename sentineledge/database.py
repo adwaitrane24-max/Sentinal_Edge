@@ -74,12 +74,22 @@ def get_alert_summary():
 
 
 # ── Blocks ───────────────────────────────────────────────────────────────────
+# expires_at is an ISO-8601 UTC timestamp (NULL = until removed); expired rows are
+# ignored everywhere and purged on the next write.
+
+_ACTIVE = "(expires_at IS NULL OR expires_at > ?)"
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
 
 def add_block(src_ip, reason, expires_at=None):
     with _lock, _conn() as c:
+        c.execute(f"DELETE FROM blocks WHERE NOT {_ACTIVE}", (_now_iso(),))
         c.execute(
             "INSERT OR REPLACE INTO blocks (src_ip,reason,blocked_at,expires_at) VALUES (?,?,?,?)",
-            (src_ip, reason, datetime.now(timezone.utc).isoformat(), expires_at),
+            (src_ip, reason, _now_iso(), expires_at),
         )
 
 
@@ -90,13 +100,13 @@ def remove_block(src_ip):
 
 def get_blocks():
     with _conn() as c:
-        rows = c.execute("SELECT * FROM blocks ORDER BY id DESC").fetchall()
+        rows = c.execute(f"SELECT * FROM blocks WHERE {_ACTIVE} ORDER BY id DESC", (_now_iso(),)).fetchall()
     return [dict(r) for r in rows]
 
 
 def is_blocked(src_ip):
     with _conn() as c:
-        row = c.execute("SELECT 1 FROM blocks WHERE src_ip=?", (src_ip,)).fetchone()
+        row = c.execute(f"SELECT 1 FROM blocks WHERE src_ip=? AND {_ACTIVE}", (src_ip, _now_iso())).fetchone()
     return row is not None
 
 

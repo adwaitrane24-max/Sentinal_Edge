@@ -39,9 +39,14 @@ updates counters under a short lock and invokes the existing detector pipeline.
 There are no per-packet database writes or per-packet WebSocket messages for telemetry.
 Alert events retain type=alert and include the persisted ID for reconnect deduplication.
 
-Manual block/remove actions retain the prototype's SQLite management behavior;
-they do not add or remove nftables rules. Configured whitelist and protected host
-addresses are rejected by the manual block API. Detection/response policies are unchanged.
+Live mode (dry_run: false) owns a dedicated nftables table, `inet sentineledge`,
+replaced atomically at startup (startup aborts if nft is unavailable). Blocked and
+rate-limited IPs are elements of its `blocked` / `ratelimited` sets: automatic ones
+expire after response.block_expiry_sec (default 600 s), manual dashboard blocks last
+until removed, and removing a block or whitelisting an IP deletes the element.
+Unexpired live blocks are restored on restart; dry-run blocks are never enforced.
+Inspect with `sudo nft list table inet sentineledge`. Configured whitelist and
+protected host addresses are rejected by the manual block API.
 
 Automated checks cover benign packets without alerts, alert/packet independence,
 TCP/UDP/non-IP and SYN flags, rate decay, synthetic and sample PCAP replay, capture
