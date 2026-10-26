@@ -273,6 +273,24 @@ class TelemetryTests(unittest.TestCase):
         self.syns(['10.0.0.66'] * 60, start=1010.0, spacing=0.01)
         self.assertEqual(self.synflood_alerts(), [('10.0.0.66', 'block')])   # 60 < 150 ceiling
 
+    # ── Rule switches (fix #8) ──
+    def sample_alert_ids(self, config):
+        alerts = []
+        d = Detector(config, alerts.append)
+        CaptureEngine({'capture': {'pcap_file': 'sample.pcap'}}, d.process, d.flush)._run()
+        return sorted({a.alert_id for a in alerts})
+
+    def test_disabled_rules_do_not_run(self):
+        import yaml
+        with open('config.yaml', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        self.assertEqual(self.sample_alert_ids(config),
+                         ['BRUTEFORCE-001', 'PORTSCAN-001', 'SIG-SIG-001', 'SIG-SIG-002', 'SYNFLOOD-001'])
+        for rule in config['rules']:
+            rule['enabled'] = False
+        config['signatures'][0]['enabled'] = False                     # SIG-001
+        self.assertEqual(self.sample_alert_ids(config), ['SIG-SIG-002'])
+
     # ── Firewall response (fix #6); nft is replaced by a recorder ──
     def nft_calls(self, run):
         return [c.args[0][1:] if c.args[0][1] != '-f' else ['-f', c.kwargs['input']] for c in run.call_args_list]

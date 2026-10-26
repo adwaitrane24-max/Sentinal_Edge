@@ -350,8 +350,9 @@ class Detector:
         self._last_alert: dict[tuple, float] = {}
         self._now = 0.0   # timestamp of the packet being processed
 
-        rules = {r["id"]: r for r in config.get("rules", []) if r.get("enabled")}
-        sigs = config.get("signatures", [])
+        rule_list = config.get("rules") or []
+        rules = {r["id"]: r for r in rule_list if r.get("enabled", True)}
+        sigs = [s for s in config.get("signatures") or [] if s.get("enabled", True)]
 
         self.sig_matcher = SignatureMatcher(sigs)
 
@@ -385,6 +386,13 @@ class Detector:
             internal_networks=exfil_cfg.get("internal_networks"),
         )
 
+        # "enabled: false" switches a detector off; rules absent from config run on defaults
+        off = {r["id"] for r in rule_list if not r.get("enabled", True)}
+        for rule_id, attr in (("PORTSCAN-001", "trw"), ("SYNFLOOD-001", "ewma"),
+                              ("BRUTEFORCE-001", "brute"), ("EXFIL-001", "exfil")):
+            if rule_id in off:
+                setattr(self, attr, None)
+
         self._rules = rules
 
     def process(self, flow: FlowRecord):
@@ -404,11 +412,11 @@ class Detector:
             ))
 
         # 2. TRW port scan (may flag a source other than this packet's, via timeouts)
-        for scanner_ip in self.trw.observe(flow):
+        for scanner_ip in self.trw.observe(flow) if self.trw else ():
             self._portscan_alert(scanner_ip)
 
         # 3. EWMA SYN flood: per victim, blamed on the sources that sent most of it
-        for ip, is_victim in self.ewma.update(flow):
+        for ip, is_victim in self.ewma.update(flow) if self.ewma else ():
             r = self._rules.get("SYNFLOOD-001", {})
             self._emit(Alert(
                 alert_id="SYNFLOOD-001",
@@ -423,7 +431,7 @@ class Detector:
 
         # 4. Brute force: each new connection (SYN) to an auth service is one login attempt
         service = AUTH_SERVICES.get(flow.dst_port)
-        if service and flow.protocol == "TCP" and flow.is_syn:
+        if self.brute and service and flow.protocol == "TCP" and flow.is_syn:
             result = self.brute.record_attempt(flow.src_ip, service,
                                                (flow.dst_ip, flow.src_port), flow.timestamp)
             if result in ("alert", "block"):
@@ -438,7 +446,7 @@ class Detector:
                 ))
 
         # 5. Exfiltration: internal host's outbound volume far above its own baseline
-        if self.exfil.record(flow):
+        if self.exfil and self.exfil.record(flow):
             r = self._rules.get("EXFIL-001", {})
             self._emit(Alert(
                 alert_id="EXFIL-001",
@@ -452,7 +460,7 @@ class Detector:
 
     def flush(self):
         """Call when the packet source ends; unanswered connection attempts count as failures."""
-        for scanner_ip in self.trw.flush():
+        for scanner_ip in self.trw.flush() if self.trw else ():
             self._portscan_alert(scanner_ip)
 
     def _emit(self, alert: Alert):
