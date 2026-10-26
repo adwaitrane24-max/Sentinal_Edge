@@ -115,15 +115,12 @@ def firewall_unblock(src_ip: str) -> None:
 
 # ── Main decision function ────────────────────────────────────────────────────
 
-def handle_alert(alert: Alert, dry_run: bool = True, ws_broadcast=None):
-    """
-    Evaluate an alert and apply the appropriate response.
-    ws_broadcast: optional async coroutine to push alert to WebSocket clients.
-    """
+def handle_alert(alert: Alert, dry_run: bool = True) -> dict:
+    """Store an alert, apply the appropriate response, and return the stored row."""
     src_ip = alert.src_ip
 
     # Always insert into DB for dashboard display
-    insert_alert(
+    row = insert_alert(
         alert_id=alert.alert_id,
         category=alert.category,
         src_ip=src_ip,
@@ -133,6 +130,12 @@ def handle_alert(alert: Alert, dry_run: bool = True, ws_broadcast=None):
     )
 
     print(f"[ALERT] {alert.alert_id} | {alert.severity.upper()} | {src_ip} | {alert.detail}")
+    _respond(alert, dry_run)
+    return row
+
+
+def _respond(alert: Alert, dry_run: bool):
+    src_ip = alert.src_ip
 
     # Skip response if whitelisted
     if is_whitelisted(src_ip):

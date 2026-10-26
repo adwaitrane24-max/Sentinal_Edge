@@ -51,13 +51,15 @@ def init_db():
 
 # ── Alerts ──────────────────────────────────────────────────────────────────
 
-def insert_alert(alert_id, category, src_ip, detail, severity, action):
+def insert_alert(alert_id, category, src_ip, detail, severity, action) -> dict:
+    """Store an alert and return the stored row (with its id and timestamp)."""
     with _lock, _conn() as c:
-        c.execute(
+        cur = c.execute(
             "INSERT INTO alerts (timestamp,alert_id,category,src_ip,detail,severity,action) "
             "VALUES (?,?,?,?,?,?,?)",
             (datetime.now(timezone.utc).isoformat(), alert_id, category, src_ip, detail, severity, action),
         )
+        return dict(c.execute("SELECT * FROM alerts WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
 def get_alerts(limit=100):

@@ -273,6 +273,23 @@ class TelemetryTests(unittest.TestCase):
         self.syns(['10.0.0.66'] * 60, start=1010.0, spacing=0.01)
         self.assertEqual(self.synflood_alerts(), [('10.0.0.66', 'block')])   # 60 < 150 ceiling
 
+    # ── Alert push (fix #9) ──
+    def test_dashboard_receives_the_alert_that_was_stored(self):
+        import run
+        run._config = {'capture': {'dry_run': True}}
+        real_insert = decision.insert_alert
+
+        def insert_then_race(**kw):
+            row = real_insert(**kw)
+            real_insert(**{**kw, 'alert_id': 'OTHER-THREAD'})   # another alert lands right after
+            return row
+        with patch('sentineledge.decision.insert_alert', side_effect=insert_then_race), \
+             patch.object(run, 'push_alert_from_thread') as push:
+            run.alert_callback(self.alert())
+        [[pushed], _] = push.call_args
+        self.assertEqual(pushed['alert_id'], 'TEST-001')        # old code pushed OTHER-THREAD
+        self.assertEqual(pushed, next(a for a in database.get_alerts() if a['id'] == pushed['id']))
+
     # ── Rule switches (fix #8) ──
     def sample_alert_ids(self, config):
         alerts = []

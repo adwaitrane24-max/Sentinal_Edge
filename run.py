@@ -18,7 +18,7 @@ import secrets
 import uvicorn
 import yaml
 
-from sentineledge.database import init_db, add_whitelist, get_alerts, get_blocks
+from sentineledge.database import init_db, add_whitelist, get_blocks
 from sentineledge.detector import Detector, FlowRecord, Alert
 from sentineledge.capture import CaptureEngine
 from sentineledge.decision import handle_alert, configure_response, setup_firewall
@@ -51,11 +51,8 @@ def load_config(path: str) -> dict:
 def alert_callback(alert: Alert):
     """Called from capture thread — bridge to async push_alert."""
     dry_run = _config.get("capture", {}).get("dry_run", True)
-    handle_alert(alert, dry_run=dry_run)
-
-    # Use the persisted identity and timestamp so reconnect hydration can deduplicate.
-    alert_dict = get_alerts(limit=1)[0]
-    push_alert_from_thread(alert_dict)
+    # Push the stored row itself: its id and timestamp let reconnecting dashboards deduplicate
+    push_alert_from_thread(handle_alert(alert, dry_run=dry_run))
 
 
 _config: dict = {}
