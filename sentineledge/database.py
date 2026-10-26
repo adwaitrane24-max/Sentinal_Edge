@@ -1,12 +1,15 @@
 """
 database.py — SQLite storage for alerts, blocks, and whitelist.
 """
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-DB_PATH = "sentineledge.db"
+# Project folder by default, so it doesn't depend on where the app was started
+DB_PATH = os.environ.get("SENTINELEDGE_DB") or str(Path(__file__).resolve().parent.parent / "sentineledge.db")
 _lock = threading.Lock()
 
 
@@ -60,6 +63,15 @@ def insert_alert(alert_id, category, src_ip, detail, severity, action) -> dict:
             (datetime.now(timezone.utc).isoformat(), alert_id, category, src_ip, detail, severity, action),
         )
         return dict(c.execute("SELECT * FROM alerts WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+def prune_alerts(retention_days: float) -> int:
+    """Delete alerts older than retention_days (0 or None keeps everything); returns the count."""
+    if not retention_days:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    with _lock, _conn() as c:
+        return c.execute("DELETE FROM alerts WHERE timestamp < ?", (cutoff,)).rowcount
 
 
 def get_alerts(limit=100):

@@ -24,6 +24,7 @@ class TelemetryTests(unittest.TestCase):
         self.capture = CaptureEngine({'capture': {'interface': 'test0'}}, self.detector.process)
         dashboard.configure_capture(self.capture)
         dashboard.configure_auth('test-token')
+        dashboard.configure_protected([])
 
     def client(self, token='test-token'):
         return TestClient(dashboard.app, headers={'Authorization': f'Bearer {token}'} if token else {})
@@ -273,6 +274,39 @@ class TelemetryTests(unittest.TestCase):
         self.syns(['10.0.0.66'] * 60, start=1010.0, spacing=0.01)
         self.assertEqual(self.synflood_alerts(), [('10.0.0.66', 'block')])   # 60 < 150 ceiling
 
+    # ── Housekeeping (fix #10) ──
+    def test_old_alerts_are_pruned(self):
+        handle_alert(self.alert(action='alert_only'), dry_run=True)
+        with database._conn() as c:
+            c.execute("UPDATE alerts SET timestamp='2000-01-01T00:00:00+00:00'")
+        handle_alert(self.alert(action='alert_only'), dry_run=True)
+        self.assertEqual(database.prune_alerts(0), 0)               # 0 = keep everything
+        self.assertEqual(database.prune_alerts(30), 1)
+        self.assertEqual(len(database.get_alerts()), 1)
+
+    def test_protected_addresses_come_from_config(self):
+        dashboard.configure_protected(['10.9.9.9'])
+        with self.client() as client:
+            self.assertEqual(client.post('/api/blocks', json={'ip': '10.9.9.9'}).status_code, 409)
+            self.assertEqual(client.post('/api/blocks', json={'ip': '127.0.0.1'}).status_code, 409)
+            # No longer hard-coded: only protected when configured
+            self.assertEqual(client.post('/api/blocks', json={'ip': '192.168.56.1'}).status_code, 200)
+
+    def test_database_lives_in_project_folder_unless_overridden(self):
+        import os, subprocess, sys
+        code = 'from sentineledge import database; print(database.DB_PATH)'
+        env = {k: v for k, v in os.environ.items() if k != 'SENTINELEDGE_DB'}
+        env['PYTHONPATH'] = str(Path.cwd())
+        run = lambda e: subprocess.run([sys.executable, '-c', code], cwd=self.temp.name, env=e,
+                                       capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(Path(run(env)), Path.cwd().resolve() / 'sentineledge.db')   # not the cwd
+        self.assertEqual(run({**env, 'SENTINELEDGE_DB': 'custom.db'}), 'custom.db')
+
+    def test_alerts_are_logged(self):
+        with self.assertLogs('sentineledge.decision', 'WARNING') as logs:
+            handle_alert(self.alert(), dry_run=True)
+        self.assertTrue(any('[ALERT] TEST-001' in line for line in logs.output))
+
     # ── Alert push (fix #9) ──
     def test_dashboard_receives_the_alert_that_was_stored(self):
         import run
@@ -377,7 +411,7 @@ class TelemetryTests(unittest.TestCase):
         import run
         cfg = Path(self.temp.name) / 'live.yaml'
         cfg.write_text('capture:\n  pcap_file: sample.pcap\n  dry_run: false\n')
-        with patch('sys.argv', ['run.py', '--config', str(cfg)]), \
+        with patch('sys.argv', ['run.py', '--config', str(cfg)]), patch('logging.basicConfig'), \
              patch('sentineledge.decision.subprocess.run', side_effect=FileNotFoundError('nft')), \
              patch.object(run.uvicorn, 'run') as server, self.assertRaises(SystemExit):
             run.main()
@@ -434,6 +468,7 @@ class TelemetryTests(unittest.TestCase):
     def test_entry_point_pcap_wiring_and_cli_overrides(self):
         import run
         with patch('sys.argv', ['run.py', '--pcap', 'sample.pcap', '--dry-run', '--port', '8123']), \
+             patch('logging.basicConfig'), \
              patch.dict('os.environ', {'SENTINELEDGE_TOKEN': 'env-token'}), \
              patch.object(CaptureEngine, 'start', CaptureEngine._run), \
              patch.object(run.uvicorn, 'run') as server:
@@ -448,6 +483,7 @@ class TelemetryTests(unittest.TestCase):
     def test_entry_point_host_override_and_generated_token(self):
         import run
         with patch('sys.argv', ['run.py', '--pcap', 'sample.pcap', '--host', '0.0.0.0']), \
+             patch('logging.basicConfig'), \
              patch.dict('os.environ', {}, clear=True), \
              patch.object(CaptureEngine, 'start', lambda self: None), \
              patch.object(run.uvicorn, 'run') as server:

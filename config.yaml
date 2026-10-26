@@ -7,6 +7,7 @@ capture:
 
 alerts:
   suppress_sec: 60           # drop repeats of the same rule + IP + action within this window; 0 = off
+  retention_days: 30         # alerts older than this are deleted at startup; 0 = keep forever
 
 response:
   block_expiry_sec: 600      # automatic blocks/rate-limits lift after this; manual blocks last until removed

@@ -4,6 +4,7 @@ Supports:
   - Live sniff on a network interface
   - Offline PCAP replay (for demo/testing)
 """
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ from scapy.all import IP, TCP, UDP, sniff, rdpcap
 from scapy.packet import Packet
 
 from .detector import FlowRecord
+
+log = logging.getLogger(__name__)
 
 
 def _scapy_to_flow(pkt: Packet) -> FlowRecord | None:
@@ -139,19 +142,19 @@ class CaptureEngine:
             with self._lock:
                 self._state = "error"
                 self._error = str(exc)
-            print(f"[CAPTURE] Failed: {exc}")
+            log.error("[CAPTURE] Failed: %s", exc)
 
     def _capture(self):
         if self.pcap_file:
-            print(f"[CAPTURE] Replaying PCAP: {self.pcap_file}")
+            log.info("[CAPTURE] Replaying PCAP: %s", self.pcap_file)
             pkts = rdpcap(self.pcap_file)
             for pkt in pkts:
                 if self._stop.is_set():
                     break
                 self._handle_packet(pkt)
-            print(f"[CAPTURE] PCAP replay complete ({len(pkts)} packets)")
+            log.info("[CAPTURE] PCAP replay complete (%d packets)", len(pkts))
         else:
-            print(f"[CAPTURE] Live sniff on interface: {self.iface}")
+            log.info("[CAPTURE] Live sniff on interface: %s", self.iface)
             if not self.iface:
                 raise ValueError("No capture interface configured")
             sniff(iface=self.iface, prn=self._handle_packet, store=False,

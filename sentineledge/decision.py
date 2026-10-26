@@ -2,6 +2,7 @@
 decision.py — Evaluates alerts against whitelist/cooldown, then
 applies response: dry-run log OR nftables block/rate-limit (auto-expiring).
 """
+import logging
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,8 @@ from .database import (
     add_block, insert_alert, is_blocked, is_whitelisted
 )
 from .detector import Alert
+
+log = logging.getLogger(__name__)
 
 # ── Cooldown table: avoid repeated blocks for same IP in short window ─────────
 _cooldown: dict[str, float] = {}
@@ -64,7 +67,7 @@ def _nft(*args: str, script: str | None = None, quiet: bool = False) -> bool:
     except (OSError, subprocess.CalledProcessError) as exc:
         if not quiet:
             detail = (getattr(exc, "stderr", None) or str(exc)).strip()
-            print(f"[RESPONSE] nftables {' '.join(args) or 'setup'} failed: {detail}")
+            log.error("[RESPONSE] nftables %s failed: %s", " ".join(args) or "setup", detail)
         return False
 
 
@@ -102,7 +105,7 @@ def firewall_block(src_ip: str, rate_limit: bool = False, timeout_sec: int | Non
     set_name = "ratelimited" if rate_limit else "blocked"
     ok = _nft("add", "element", "inet", NFT_TABLE, set_name, f"{{ {ip}{timeout} }}")
     if ok:
-        print(f"[RESPONSE] nftables: {'rate-limited' if rate_limit else 'blocked'} {ip}{timeout}")
+        log.warning("[RESPONSE] nftables: %s %s%s", "rate-limited" if rate_limit else "blocked", ip, timeout)
     return ok
 
 
@@ -129,7 +132,7 @@ def handle_alert(alert: Alert, dry_run: bool = True) -> dict:
         action=alert.action,
     )
 
-    print(f"[ALERT] {alert.alert_id} | {alert.severity.upper()} | {src_ip} | {alert.detail}")
+    log.warning("[ALERT] %s | %s | %s | %s", alert.alert_id, alert.severity.upper(), src_ip, alert.detail)
     _respond(alert, dry_run)
     return row
 
@@ -139,7 +142,7 @@ def _respond(alert: Alert, dry_run: bool):
 
     # Skip response if whitelisted
     if is_whitelisted(src_ip):
-        print(f"[DECISION] {src_ip} is whitelisted — no action taken")
+        log.info("[DECISION] %s is whitelisted — no action taken", src_ip)
         return
 
     # Skip if already blocked
@@ -160,7 +163,7 @@ def _respond(alert: Alert, dry_run: bool):
     rate_limit = alert.action == "rate_limit"
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=BLOCK_EXPIRY_SEC)).isoformat()
     if dry_run:
-        print(f"[DRY-RUN] Would {alert.action} {src_ip} (rule: {alert.alert_id})")
+        log.warning("[DRY-RUN] Would %s %s (rule: %s)", alert.action, src_ip, alert.alert_id)
         add_block(src_ip, reason=f"[DRY-RUN] {alert.alert_id}", expires_at=expires_at)
     elif firewall_block(src_ip, rate_limit=rate_limit, timeout_sec=BLOCK_EXPIRY_SEC):
         # Only record blocks the firewall actually applied, so the dashboard never lies

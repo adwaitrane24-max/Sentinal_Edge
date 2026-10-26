@@ -39,9 +39,16 @@ _capture = None
 _dry_run = True
 _token = secrets.token_urlsafe(24)   # replaced by run.py; never empty
 
+_protected = {"127.0.0.1"}            # never blockable from the dashboard
+
 def configure_capture(capture, dry_run: bool = True):
     global _capture, _dry_run
     _capture, _dry_run = capture, dry_run
+
+def configure_protected(ips):
+    """Addresses the manual block API always refuses (localhost plus the configured whitelist)."""
+    global _protected
+    _protected = {"127.0.0.1", *ips}
 
 def configure_auth(token: str):
     """Set the access token required by /api/* and /ws."""
@@ -166,7 +173,7 @@ class BlockRequest(BaseModel):
 @app.post("/api/blocks")
 async def api_add_block(body: BlockRequest):
     validate_ip(body.ip)
-    if body.ip in ("127.0.0.1", "192.168.56.1") or is_whitelisted(body.ip):
+    if body.ip in _protected or is_whitelisted(body.ip):
         raise HTTPException(409, "Protected or whitelisted address")
     # Manual blocks are enforced in live mode and last until removed
     if not _dry_run and not firewall_block(body.ip):

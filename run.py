@@ -13,16 +13,18 @@ Starts:
   3. FastAPI + Uvicorn server (blocking)
 """
 import argparse
+import logging
 import os
 import secrets
 import uvicorn
 import yaml
 
-from sentineledge.database import init_db, add_whitelist, get_blocks
+from sentineledge.database import init_db, add_whitelist, get_blocks, prune_alerts
 from sentineledge.detector import Detector, FlowRecord, Alert
 from sentineledge.capture import CaptureEngine
 from sentineledge.decision import handle_alert, configure_response, setup_firewall
-from sentineledge.dashboard import app, push_alert_from_thread, configure_capture, configure_auth
+from sentineledge.dashboard import (app, push_alert_from_thread, configure_capture, configure_auth,
+                                    configure_protected)
 
 
 def parse_args():
@@ -39,7 +41,7 @@ def parse_args():
 
 def load_config(path: str) -> dict:
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             config = yaml.safe_load(f)
         if not isinstance(config, dict) or not isinstance(config.get("capture", {}), dict):
             raise ValueError("configuration must contain a mapping")
@@ -62,6 +64,8 @@ def main():
     global _config
 
     args = parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s",
+                        datefmt="%H:%M:%S")
     _config = load_config(args.config)
 
     # CLI overrides
@@ -73,12 +77,17 @@ def main():
     if args.dry_run is not None:
         _config.setdefault("capture", {})["dry_run"] = args.dry_run
 
-    # Init DB
+    # Init DB and drop alerts past the retention period
     init_db()
+    removed = prune_alerts((_config.get("alerts") or {}).get("retention_days", 30))
+    if removed:
+        logging.info("[DB] Removed %d alerts older than the retention period", removed)
 
-    # Seed whitelist from config
-    for ip in _config.get("whitelist", []):
+    # Seed whitelist from config; those addresses can never be blocked from the dashboard
+    whitelist = _config.get("whitelist") or []
+    for ip in whitelist:
         add_whitelist(ip, note="config")
+    configure_protected(whitelist)
 
     # Live mode: (re)create the firewall table and restore unexpired blocks
     configure_response((_config.get("response") or {}).get("block_expiry_sec"))
@@ -116,7 +125,7 @@ def main():
 |  Listening: {args.host}:{args.port}{'  (WARNING: reachable from the network)' if exposed else '  (this machine only)'}
 |  Dashboard: http://{link_host}:{args.port}/#token={token}
 +----------------------------------------------+
-""")
+""", flush=True)   # the link carries the token: show it even when output goes to a log file
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
