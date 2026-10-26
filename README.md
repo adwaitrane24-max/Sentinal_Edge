@@ -1,18 +1,81 @@
 # SentinelEdge
 
 A small network intrusion detection system (NIDS) for a lab network. It watches
-packets, spots common attacks, can block attackers with the Linux firewall
-(nftables), and shows everything on a live web dashboard.
+packets, spots common attacks, labels them with **MITRE ATT&CK** techniques, can block
+attackers with the Linux firewall (nftables), and shows everything on a live web dashboard.
 
-| Detects | How |
-|---|---|
-| Port scans | Threshold Random Walk over first-contact TCP connection attempts |
-| SYN floods | Per-victim SYN rate against a learned (EWMA) baseline, blaming only the dominant sources |
-| SSH / FTP / RDP brute force | New login connections per source in sliding windows |
-| Data exfiltration | A host's outbound volume compared with its own 24 h baseline |
-| Known-bad payloads | Keyword signatures (Aho-Corasick), e.g. `/etc/passwd`, `cmd.exe` |
+![SentinelEdge dashboard after replaying sample.pcap](docs/screenshots/dashboard.png)
+
+**Measured results** on 15 labelled scenarios ([full report](docs/evaluation.md)):
+**10 / 10 attacks detected, 0 false alarms**, compared with 8 / 10 and 105 false alarms
+for the original version.
+
+| Detects | How | MITRE ATT&CK |
+|---|---|---|
+| Port scans | Threshold Random Walk over first-contact TCP connection attempts | [T1046](https://attack.mitre.org/techniques/T1046/) Network Service Discovery |
+| SYN floods | Per-victim SYN rate against a learned (EWMA) baseline, blaming only the dominant sources | [T1498.001](https://attack.mitre.org/techniques/T1498/001/) Direct Network Flood |
+| SSH / FTP / RDP brute force | New login connections per source in sliding windows | [T1110](https://attack.mitre.org/techniques/T1110/) Brute Force |
+| Data exfiltration | A host's outbound volume compared with its own 24 h baseline | [TA0010](https://attack.mitre.org/tactics/TA0010/) Exfiltration |
+| Known-bad payloads | Keyword signatures (Aho-Corasick), e.g. `/etc/passwd`, `cmd.exe` | per signature, e.g. [T1190](https://attack.mitre.org/techniques/T1190/), [T1059.003](https://attack.mitre.org/techniques/T1059/003/) |
 
 It runs in **dry-run mode by default**: it logs what it *would* block and never touches the firewall.
+
+## How it works
+
+```mermaid
+flowchart LR
+    NET["Network interface<br/>or .pcap file"] --> CAP["capture.py<br/>parse packets,<br/>count traffic"]
+    CAP --> DET["detector.py<br/>5 detectors"]
+    DET -->|"alert + MITRE label"| DEC["decision.py<br/>whitelist, cooldown"]
+    DEC --> DB[("SQLite<br/>alerts, blocks")]
+    DEC -->|live mode only| FW["nftables<br/>table inet sentineledge"]
+    DB --> DASH["dashboard.py<br/>REST API + WebSocket"]
+    DASH --> UI["Browser dashboard<br/>(token protected)"]
+```
+
+Every packet is turned into a small record (addresses, ports, TCP flags, payload,
+timestamp) and passed to each detector. Detectors use the **packet's own timestamp**,
+so a recorded capture behaves exactly like live traffic. In plain words:
+
+- **Port scan:** every *new* host+port a machine tries to reach is one "attempt"; the
+  target's answer decides whether it succeeded (SYN-ACK) or failed (RST or silence).
+  Normal users mostly succeed, scanners mostly fail, and a statistical test (TRW)
+  decides once the evidence is strong enough, usually after about 4 failures.
+- **SYN flood:** counts connection requests per *target* each second and compares them
+  with what is normal for that target. It blames only senders responsible for at least
+  20% of the flood; if no one is (spoofed or distributed attack), it warns about the
+  victim instead of blocking random addresses.
+- **Brute force:** logins are encrypted, so it counts *new connections* to SSH, FTP and RDP:
+  6 in a minute gives a warning, 10 in five minutes a block.
+- **Exfiltration:** remembers how much each internal machine normally uploads to the
+  Internet (per minute, for 24 hours) and flags a sudden upload many times larger.
+- **Signatures:** searches packet contents for known attack strings in one pass.
+
+Repeated alerts for the same attacker are suppressed for 60 seconds, so one attack
+produces one alert, not thousands.
+
+## Evaluation
+
+`evaluate.py` builds 15 labelled packet traces: 5 kinds of normal traffic (web browsing,
+a long SSH session, a busy server, a LAN copy, a large download) and 10 attacks
+(including attacks hidden inside normal traffic). It runs each through the real detector
+and checks that attacks are reported for the right IP and that normal traffic raises nothing.
+
+| Measure | Original version | Current |
+|---|---|---|
+| Attacks detected | 8 / 10 | **10 / 10** |
+| Normal scenarios without false alarms | 0 / 5 | **5 / 5** |
+| False alarms (wrong type or wrong IP) | 105 | **0** |
+| Alerts raised in total | 8,645 | **15** |
+
+```bash
+python evaluate.py                     # current code; writes docs/evaluation.md
+python evaluate.py --baseline ddb182e  # also re-runs the original commit for comparison
+```
+
+The scenarios are synthetic and small (the exfiltration threshold is scaled down to
+1 MB), so they show the detectors' logic is right, not how they perform on a large real
+network. A unit test runs them in CI so detection can't silently get worse.
 
 ## Quick start (Windows, macOS or Linux): replay the sample capture
 
@@ -31,6 +94,8 @@ Your browser opens the dashboard automatically. If it doesn't (or you closed it)
 the **Dashboard:** link printed in the terminal, for example
 `http://127.0.0.1:8000/#token=...`. Use that exact link: plain `http://localhost:8000`
 shows an "Access token needed" panel, where you can paste the link instead.
+
+<img src="docs/screenshots/token-needed.png" alt="Access token needed panel" width="720">
 `sample.pcap` contains one of each attack, so you should see 5 alerts (port scan,
 SYN flood, brute force, two signatures).
 
@@ -65,8 +130,8 @@ live mode refuses to start rather than running unprotected.
 | `alerts` | `suppress_sec` (drop repeats of the same alert), `retention_days` |
 | `response` | `block_expiry_sec` for automatic blocks |
 | `whitelist` | IPs that are never blocked |
-| `rules` | One entry per detector: `enabled`, `params`, `severity`, `action` (`block`, `rate_limit` or `alert_only`) |
-| `signatures` | Keyword patterns; each can be switched off with `enabled: false` |
+| `rules` | One entry per detector: `enabled`, `params`, `severity`, `action` (`block`, `rate_limit` or `alert_only`), `mitre` |
+| `signatures` | Keyword patterns with `severity` and `mitre`; each can be switched off with `enabled: false` |
 
 Environment variables: `SENTINELEDGE_TOKEN` (dashboard token), `SENTINELEDGE_DB`
 (database path; default `sentineledge.db` in the project folder).
@@ -93,6 +158,8 @@ sentineledge/
   database.py           SQLite storage: alerts, blocks, whitelist
   dashboard.py          FastAPI web server, REST API and WebSocket
 templates/index.html    the dashboard page
+evaluate.py             labelled scenarios and the detection report
+docs/evaluation.md      latest evaluation report (generated)
 create_sample_pcap.py   regenerates sample.pcap
 test_telemetry.py       Python tests
 test_dashboard.cjs      dashboard JavaScript tests (no browser needed)
@@ -107,3 +174,5 @@ test_dashboard.cjs      dashboard JavaScript tests (no browser needed)
   enable SYN cookies (`net.ipv4.tcp_syncookies`) on the protected host.
 - The nftables integration and live capture have only been exercised with the
   firewall stubbed out, not against a real kernel in CI.
+- The evaluation uses synthetic traces, not a public dataset such as CIC-IDS2017, and
+  Python packet parsing limits throughput on busy links.
