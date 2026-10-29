@@ -41,12 +41,13 @@ updates counters under a short lock and invokes the existing detector pipeline.
 There are no per-packet database writes or per-packet WebSocket messages for telemetry.
 Alert events retain type=alert and include the persisted ID for reconnect deduplication.
 
-Live mode (dry_run: false) owns a dedicated nftables table, `inet sentineledge`,
+Live mode (--enforce or dry_run: false) owns a dedicated nftables table, `inet sentineledge`,
 replaced atomically at startup (startup aborts if nft is unavailable). Blocked and
 rate-limited IPs are elements of its `blocked` / `ratelimited` sets: automatic ones
-expire after response.block_expiry_sec (default 600 s), manual dashboard blocks last
-until removed, and removing a block or whitelisting an IP deletes the element.
-Unexpired live blocks are restored on restart; dry-run blocks are never enforced.
+are permanent with the shipped response.block_expiry_sec: 0 (a positive value makes
+them expire), manual dashboard blocks last until removed, and removing a block or
+whitelisting an IP deletes the element. Live blocks are restored on restart;
+dry-run blocks are never enforced and are cleared when enforcement starts.
 Inspect with `sudo nft list table inet sentineledge`. Configured whitelist and
 protected host addresses are rejected by the manual block API.
 
@@ -55,6 +56,7 @@ TCP/UDP/non-IP and SYN flags, rate decay, synthetic and sample PCAP replay, capt
 errors, status before startup, API status, malformed/protected management requests,
 WebSocket schema/reconnection, and frontend state/reconnect scheduling.
 
-Real privileged live capture on Linux eth0 and nftables enforcement were not exercised
-in the Windows development environment. Verify ordinary traffic increments Packets
-without Alerts and that traffic/idle periods change rates on the target Linux host.
+Live capture on eth0 and nftables enforcement were exercised on Ubuntu under WSL2:
+a port scan from the Windows host was detected, the host's IP was blocked with no
+timeout, its connections to a web server in WSL were dropped, and the block was
+restored after the nftables table was deleted and SentinelEdge restarted.

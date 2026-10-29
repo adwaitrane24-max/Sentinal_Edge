@@ -3,14 +3,15 @@
 capture:
   interface: "eth0"          # change to your VM NIC name
   pcap_file: null            # set to a .pcap path for offline replay, e.g. "sample.pcap"
-  dry_run: true              # true = log only; false = apply nftables rules
+  dry_run: true              # true = log only; false = apply nftables rules (or run with --enforce)
 
 alerts:
   suppress_sec: 60           # drop repeats of the same rule + IP + action within this window; 0 = off
   retention_days: 30         # alerts older than this are deleted at startup; 0 = keep forever
 
 response:
-  block_expiry_sec: 600      # automatic blocks/rate-limits lift after this; manual blocks last until removed
+  block_expiry_sec: 0        # automatic blocks lift after this many seconds; 0 = permanent until removed
+                             # from the dashboard (blocks are restored when SentinelEdge restarts)
 
 whitelist:
   - "127.0.0.1"
@@ -27,7 +28,7 @@ rules:
       theta0: 0.8
       theta1: 0.2
     severity: medium
-    action: rate_limit
+    action: block
     enabled: true
 
   - id: SYNFLOOD-001
@@ -49,7 +50,7 @@ rules:
     params:
       fail_threshold_alert: 6
       fail_window_alert_sec: 60
-      fail_threshold_block: 10
+      fail_threshold_block: 6           # same as the alert threshold: block on first detection
       fail_window_block_sec: 300
     severity: high
     action: block
@@ -68,20 +69,24 @@ rules:
     action: alert_only
     enabled: true
 
-signatures:
+signatures:                     # action: block or alert_only (default alert_only)
   - id: SIG-001
     pattern: "/etc/passwd"
     severity: high
+    action: block
     mitre: T1190                # ATT&CK: Exploit Public-Facing Application
   - id: SIG-002
     pattern: "cmd.exe"
     severity: high
+    action: block
     mitre: T1059.003            # ATT&CK: Windows Command Shell
   - id: SIG-003
     pattern: "SELECT * FROM"
     severity: medium
+    action: block
     mitre: T1190                # ATT&CK: Exploit Public-Facing Application
   - id: SIG-004
     pattern: "nmap"
     severity: low
+    action: block
     mitre: T1046                # ATT&CK: Network Service Discovery

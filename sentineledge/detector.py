@@ -409,6 +409,8 @@ class Detector:
         self._mitre = {**MITRE_DEFAULTS,
                        **{r["id"]: r["mitre"] for r in rule_list if r.get("mitre")},
                        **{self._sig_alert_id(s["id"]): s["mitre"] for s in sigs if s.get("mitre")}}
+        # alert_id -> response for signature hits (config `action:`, default alert_only)
+        self._sig_actions = {self._sig_alert_id(s["id"]): s.get("action", "alert_only") for s in sigs}
 
     @staticmethod
     def _sig_alert_id(sig_id: str) -> str:
@@ -421,13 +423,14 @@ class Detector:
         match = self.sig_matcher.match(flow.payload)
         if match:
             sig_id, severity = match
+            alert_id = self._sig_alert_id(sig_id)
             self._emit(Alert(
-                alert_id=self._sig_alert_id(sig_id),
+                alert_id=alert_id,
                 category="signature",
                 src_ip=flow.src_ip,
                 detail=f"Signature hit: {sig_id}",
                 severity=severity,
-                action="alert_only",
+                action=self._sig_actions.get(alert_id, "alert_only"),
             ))
 
         # 2. TRW port scan (may flag a source other than this packet's, via timeouts)

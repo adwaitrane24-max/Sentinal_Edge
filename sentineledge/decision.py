@@ -1,6 +1,7 @@
 """
 decision.py — Evaluates alerts against whitelist/cooldown, then
-applies response: dry-run log OR nftables block/rate-limit (auto-expiring).
+applies response: dry-run log OR nftables block/rate-limit (permanent, or
+auto-expiring when response.block_expiry_sec > 0).
 """
 import logging
 import subprocess
@@ -18,12 +19,12 @@ log = logging.getLogger(__name__)
 # ── Cooldown table: avoid repeated blocks for same IP in short window ─────────
 _cooldown: dict[str, float] = {}
 COOLDOWN_SEC = 60          # seconds before re-acting on same IP
-BLOCK_EXPIRY_SEC = 600     # automatic blocks expire after this (config: response.block_expiry_sec)
+BLOCK_EXPIRY_SEC = 600     # automatic blocks expire after this; 0 = permanent (config: response.block_expiry_sec)
 
 
 def configure_response(block_expiry_sec: int | None = None):
     global BLOCK_EXPIRY_SEC
-    if block_expiry_sec:
+    if block_expiry_sec is not None:
         BLOCK_EXPIRY_SEC = int(block_expiry_sec)
 
 
@@ -146,8 +147,9 @@ def _respond(alert: Alert, dry_run: bool):
         log.info("[DECISION] %s is whitelisted — no action taken", src_ip)
         return
 
-    # Skip if already blocked
+    # Already blocked: the block stands, and in live mode the firewall drops its traffic
     if is_blocked(src_ip):
+        log.info("[DECISION] %s is already blocked — keeping the block", src_ip)
         return
 
     # Skip if in cooldown
@@ -162,11 +164,12 @@ def _respond(alert: Alert, dry_run: bool):
         return
 
     rate_limit = alert.action == "rate_limit"
-    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=BLOCK_EXPIRY_SEC)).isoformat()
+    expiry = BLOCK_EXPIRY_SEC or None    # None = permanent until removed from the dashboard
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expiry)).isoformat() if expiry else None
     if dry_run:
         log.warning("[DRY-RUN] Would %s %s (rule: %s)", alert.action, src_ip, alert.alert_id)
         add_block(src_ip, reason=f"[DRY-RUN] {alert.alert_id}", expires_at=expires_at)
-    elif firewall_block(src_ip, rate_limit=rate_limit, timeout_sec=BLOCK_EXPIRY_SEC):
+    elif firewall_block(src_ip, rate_limit=rate_limit, timeout_sec=expiry):
         # Only record blocks the firewall actually applied, so the dashboard never lies
         add_block(src_ip, reason=f"rate-limit:{alert.alert_id}" if rate_limit else alert.alert_id,
                   expires_at=expires_at)

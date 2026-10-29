@@ -66,7 +66,7 @@ and checks that attacks are reported for the right IP and that normal traffic ra
 | Attacks detected | 8 / 10 | **10 / 10** |
 | Normal scenarios without false alarms | 0 / 5 | **5 / 5** |
 | False alarms (wrong type or wrong IP) | 105 | **0** |
-| Alerts raised in total | 8,645 | **15** |
+| Alerts raised in total | 8,645 | **13** |
 
 ```bash
 python evaluate.py                     # current code; writes docs/evaluation.md
@@ -103,13 +103,17 @@ SYN flood, brute force, two signatures).
 
 ```bash
 sudo .venv/bin/python run.py --iface eth0             # dry run: detect + log only
+sudo .venv/bin/python run.py --iface eth0 --enforce   # detect + block attackers
 ```
 
-To enforce blocks, set `dry_run: false` in `config.yaml`. SentinelEdge then manages
-its own nftables table, `inet sentineledge`. Automatic blocks lift after
-`response.block_expiry_sec`; manual dashboard blocks last until you remove them.
-Inspect it with `sudo nft list table inet sentineledge`. If nftables isn't available,
-live mode refuses to start rather than running unprotected.
+To enforce blocks, pass `--enforce` (or set `dry_run: false` in `config.yaml`). SentinelEdge
+then manages its own nftables table, `inet sentineledge`. With the shipped config every
+detection blocks its source (port scan, SYN flood, brute force, signatures; exfiltration
+only alerts, since its source is your own machine), and blocks are **permanent**
+(`response.block_expiry_sec: 0`) until you remove them from the dashboard. Blocks are
+stored in the database and restored on restart, and the sensor never blocks its own
+address. Inspect it with `sudo nft list table inet sentineledge`. If nftables isn't
+available, live mode refuses to start rather than running unprotected.
 
 ## The dashboard
 
@@ -128,7 +132,7 @@ live mode refuses to start rather than running unprotected.
 |---|---|
 | `capture` | Interface, PCAP file, `dry_run` |
 | `alerts` | `suppress_sec` (drop repeats of the same alert), `retention_days` |
-| `response` | `block_expiry_sec` for automatic blocks |
+| `response` | `block_expiry_sec` for automatic blocks (0 = permanent) |
 | `whitelist` | IPs that are never blocked |
 | `rules` | One entry per detector: `enabled`, `params`, `severity`, `action` (`block`, `rate_limit` or `alert_only`), `mitre` |
 | `signatures` | Keyword patterns with `severity` and `mitre`; each can be switched off with `enabled: false` |

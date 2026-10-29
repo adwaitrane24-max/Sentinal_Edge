@@ -23,7 +23,9 @@ import webbrowser
 import uvicorn
 import yaml
 
-from sentineledge.database import init_db, add_whitelist, get_blocks, prune_alerts
+from scapy.all import get_if_addr
+
+from sentineledge.database import init_db, add_whitelist, get_blocks, prune_alerts, remove_block
 from sentineledge.detector import Detector, FlowRecord, Alert
 from sentineledge.capture import CaptureEngine
 from sentineledge.decision import handle_alert, configure_response, setup_firewall
@@ -36,6 +38,8 @@ def parse_args():
     p.add_argument("--iface",   default=None, help="Network interface for live capture")
     p.add_argument("--pcap",    default=None, help="Path to a .pcap file for replay")
     p.add_argument("--dry-run", action="store_true", default=None, help="Log-only mode (no firewall rules)")
+    p.add_argument("--enforce", dest="dry_run", action="store_false",
+                   help="Apply blocks with nftables (Linux, root); overrides dry_run in the config")
     p.add_argument("--host",    default="127.0.0.1",
                    help="Dashboard bind address (default 127.0.0.1 = this machine only; 0.0.0.0 = whole network)")
     p.add_argument("--port",    type=int, default=8000, help="Dashboard port (default 8000)")
@@ -99,11 +103,21 @@ def main():
     whitelist = _config.get("whitelist") or []
     for ip in whitelist:
         add_whitelist(ip, note="config")
+    # Live capture: the sensor must never block its own address
+    if not _config.get("capture", {}).get("pcap_file"):
+        own_ip = get_if_addr(_config.get("capture", {}).get("interface", "eth0"))
+        if own_ip and own_ip != "0.0.0.0":
+            add_whitelist(own_ip, note="sensor")
+            whitelist = [*whitelist, own_ip]
     configure_protected(whitelist)
 
     # Live mode: (re)create the firewall table and restore unexpired blocks
     configure_response((_config.get("response") or {}).get("block_expiry_sec"))
     if not _config.get("capture", {}).get("dry_run", True):
+        # "Would block" entries from dry runs were never enforced; drop them so those IPs get a real block
+        for b in get_blocks():
+            if (b.get("reason") or "").startswith("[DRY-RUN]"):
+                remove_block(b["src_ip"])
         try:
             setup_firewall(get_blocks())
         except RuntimeError as exc:

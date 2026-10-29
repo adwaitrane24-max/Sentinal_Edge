@@ -19,6 +19,7 @@ class TelemetryTests(unittest.TestCase):
         self.db_patch.start()
         database.init_db()
         _cooldown.clear()
+        decision.configure_response(600)   # run.main() applies config.yaml's value (0 = permanent)
         self.alerts = []
         self.detector = Detector({'signatures': [{'id': 'test', 'pattern': 'attack', 'severity': 'high'}]}, self.on_alert)
         self.capture = CaptureEngine({'capture': {'interface': 'test0'}}, self.detector.process)
@@ -405,6 +406,40 @@ class TelemetryTests(unittest.TestCase):
             ['add', 'element', 'inet', 'sentineledge', 'blocked', '{ 10.0.0.66 timeout 600s }'],
             ['add', 'element', 'inet', 'sentineledge', 'ratelimited', '{ 10.0.0.67 timeout 600s }']])
         self.assertEqual({b['src_ip'] for b in database.get_blocks()}, {'10.0.0.66', '10.0.0.67'})
+
+    def test_zero_expiry_blocks_permanently_and_block_stands_on_repeat(self):
+        decision.configure_response(0)
+        with patch('sentineledge.decision.subprocess.run') as run:
+            handle_alert(self.alert('10.0.0.66', 'block'), dry_run=False)
+            _cooldown.clear()                                  # the same attacker comes back later
+            handle_alert(self.alert('10.0.0.66', 'block'), dry_run=False)
+        self.assertEqual(self.nft_calls(run), [
+            ['add', 'element', 'inet', 'sentineledge', 'blocked', '{ 10.0.0.66 }']])   # no timeout
+        [block] = database.get_blocks()
+        self.assertIsNone(block['expires_at'])
+        self.assertTrue(database.is_blocked('10.0.0.66'))
+
+    def test_signature_action_comes_from_config(self):
+        d = Detector({'signatures': [{'id': 'SIG-001', 'pattern': '/etc/passwd', 'severity': 'high', 'action': 'block'},
+                                     {'id': 'SIG-002', 'pattern': 'cmd.exe', 'severity': 'high'}]},
+                     self.alerts.append)
+        c = CaptureEngine({'capture': {'interface': 'test0'}}, d.process)
+        c._handle_packet(IP(src='10.0.0.5', dst='10.0.0.1')/TCP(dport=80, flags='PA')/Raw(b'GET /etc/passwd'))
+        c._handle_packet(IP(src='10.0.0.6', dst='10.0.0.1')/TCP(dport=80, flags='PA')/Raw(b'GET /cmd.exe'))
+        self.assertEqual([(a.alert_id, a.action) for a in self.alerts],
+                         [('SIG-001', 'block'), ('SIG-002', 'alert_only')])   # alert_only is the default
+
+    def test_project_config_blocks_every_attacker_permanently(self):
+        config = self.project_config()
+        self.assertEqual(config['response']['block_expiry_sec'], 0)
+        self.assertTrue(all(a.action == 'block' for a in self.sample_alerts(config)))
+
+    def test_enforce_flag_turns_off_dry_run(self):
+        import run
+        with patch('sys.argv', ['run.py', '--enforce']):
+            self.assertFalse(run.parse_args().dry_run)
+        with patch('sys.argv', ['run.py']):
+            self.assertIsNone(run.parse_args().dry_run)              # config decides
 
     def test_live_block_not_recorded_when_firewall_fails(self):
         with patch('sentineledge.decision.subprocess.run', side_effect=FileNotFoundError('nft')):
